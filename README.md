@@ -25,9 +25,11 @@ After the one-time key fetch, it never touches Plaud's servers again.
 
 ## The menu-bar app
 
-<div align="center">
-<em>🎙️ waveform icon in your menu bar → Sign in → Download my recordings → done.</em>
-</div>
+🎙️ A waveform icon lives in your menu bar. Open it for a small dashboard:
+
+- **Recordings** — every recording on the device with its date, length and size. Download, play, or delete each one, a storage bar showing how full the device is, and a **"delete from device after download"** toggle to stop it filling up.
+- **Device** — live status: serial, battery, free space, and whether it's recording (with a Stop button).
+- **Settings** — download folder, the delete-after-download default, and sign out.
 
 ```bash
 cd PlaudMenuBar
@@ -36,7 +38,9 @@ open ./PlaudMenuBar.app
 ```
 
 - **Sign in to Plaud** opens `web.plaud.ai` in a window. Log in normally; the app reads the session cookie the site sets. It never scrapes the page or asks you to paste a token.
-- **Download my recordings** fetches your keys (once), connects over Bluetooth, and saves everything to `~/Downloads/Plaud Recordings`.
+- The first connect fetches your keys once; after that everything happens directly over Bluetooth, and recordings save to `~/Downloads/Plaud Recordings`.
+
+> See [DEVICE_OPERATIONS.md](DEVICE_OPERATIONS.md) for the full list of ~160 things the device protocol exposes — the dashboard uses a safe subset.
 
 > macOS needs the app to be a signed bundle with a Bluetooth usage string, or it kills the process the instant it touches the radio. `build.sh` handles the bundle + ad-hoc signing for you.
 

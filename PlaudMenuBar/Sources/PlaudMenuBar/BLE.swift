@@ -66,9 +66,12 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     func disconnect() {
         if let p = peripheral { central.cancelPeripheralConnection(p) }
         peripheral = nil; writeChar = nil; notifyChar = nil; session = nil; portVersion = 20
+        // Drop any state left from the prior session so a reconnect starts clean.
+        buffer.removeAll(); secretParts.removeAll(); secretTotal = nil; sawFE11 = false
+        failWaiter(BLEError.message("disconnected"))
     }
 
-    var isConnected: Bool { peripheral?.state == .connected && writeChar != nil }
+    var isConnected: Bool { peripheral?.state == .connected && writeChar != nil && session != nil }
 
     private func awaitStep(_ kind: Step, _ timeout: TimeInterval) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -363,4 +366,59 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private func le32(_ d: Data, _ i: Data.Index) -> UInt32 {
         UInt32(d[i]) | (UInt32(d[i + 1]) << 8) | (UInt32(d[i + 2]) << 16) | (UInt32(d[i + 3]) << 24)
     }
+    private func le64(_ d: Data, _ o: Int) -> UInt64 {
+        let i = d.startIndex.advanced(by: o)
+        var v: UInt64 = 0
+        for k in 0..<8 { v |= UInt64(d[i + k]) << (8 * k) }
+        return v
+    }
+
+    // MARK: device status and management (all after the handshake)
+
+    // getStorage (cmd 6): free, total, duration in the device's units.
+    func getStorage() async throws -> StorageInfo {
+        try send(Proto.command(Proto.CMD_GET_STORAGE))
+        let b = try await waitCommand([Proto.CMD_GET_STORAGE], timeout: 10)
+        guard b.count >= 19 else { throw BLEError.message("short storage reply") }
+        let free = le64(b, 3), total = le64(b, 11)
+        let dur: UInt64 = b.count >= 27 ? le64(b, 19) : 0
+        return StorageInfo(free: free, total: total, durationSeconds: dur)
+    }
+
+    // getBattStatus (cmd 9): charging flag + level 0–100.
+    func getBattery() async throws -> Battery {
+        try send(Proto.command(Proto.CMD_GET_BATTERY))
+        let b = try await waitCommand([Proto.CMD_GET_BATTERY], timeout: 10)
+        return Battery(charging: b.count > 3 && b[b.startIndex + 3] == 1,
+                       level: b.count > 4 ? Int(b[b.startIndex + 4]) : 0)
+    }
+
+    // getState (cmd 3): is it recording, and the current session id.
+    func getRecordingState() async throws -> RecordingState {
+        try send(Proto.command(Proto.CMD_GET_STATE))
+        let b = try await waitCommand([Proto.CMD_GET_STATE], timeout: 10)
+        let sid = b.count >= 7 ? le32(b, b.startIndex.advanced(by: 3)) : 0
+        let recording = b.count > 7 && b[b.startIndex + 7] == 1
+        return RecordingState(recording: recording, sessionId: sid)
+    }
+
+    // Delete one recording: send cmd 30 with the session id, wait for cmd 31 + status (0 = deleted).
+    func deleteRecording(_ sessionId: UInt32) async throws {
+        try send(Proto.command(Proto.CMD_DELETE_FILE, Proto.u32le(sessionId)))
+        let b = try await waitCommand([Proto.CMD_DELETE_FILE_RSP], timeout: 15)
+        // status is at byte 7 when the reply echoes the session id (protocol >= 7), else byte 3.
+        let status = portVersion >= 7 ? (b.count > 7 ? Int(b[b.startIndex + 7]) : -1)
+                                      : (b.count > 3 ? Int(b[b.startIndex + 3]) : -1)
+        guard status == 0 else { throw BLEError.message("device refused delete, status=\(status)") }
+    }
+
+    // Stop an in-progress recording (cmd 145).
+    func stopRecording() async throws {
+        try send(Proto.command(Proto.CMD_STOP_RECORD))
+        _ = try await waitCommand([Proto.CMD_STOP_RECORD_RSP], timeout: 10)
+    }
 }
+
+struct StorageInfo { let free: UInt64; let total: UInt64; let durationSeconds: UInt64 }
+struct Battery { let charging: Bool; let level: Int }
+struct RecordingState { let recording: Bool; let sessionId: UInt32 }
