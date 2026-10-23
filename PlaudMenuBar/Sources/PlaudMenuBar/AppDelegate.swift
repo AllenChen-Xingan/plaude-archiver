@@ -58,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: actions
 
     @objc private func signIn() {
-        login = LoginWindow { [weak self] token in
+        let win = LoginWindow { [weak self] token in
             guard let self else { return }
             self.store.userToken = token
             self.store.apiHost = PlaudAPI.hostFromToken(token)
@@ -66,7 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.setStatus("Signed in.")
             self.login = nil
         }
-        login?.show()
+        win.onClose = { [weak self] in self?.login = nil }
+        login = win
+        win.show()
     }
 
     @objc private func signOut() {
@@ -126,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 2. Connect over Bluetooth and read the serial.
         setStatus("Connecting to the device…")
         try await ble.connect()
+        defer { ble.disconnect() }   // always drop the link, even if a later step throws
         guard let serial = ble.discoveredSerial else { throw BLEError.message("could not read the device serial") }
 
         // 3. SN signature for this serial (fetch once per device).
@@ -148,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 5. List and pull.
         setStatus("Listing recordings…")
         let files = try await ble.listSessions()
-        if files.isEmpty { setStatus("No recordings on the device."); ble.disconnect(); return }
+        if files.isEmpty { setStatus("No recordings on the device."); return }
 
         let dir = store.defaultDownloadDir
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -168,7 +171,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             saved += 1
         }
-        ble.disconnect()
         setStatus("Done. \(saved) recording(s) in \(dir.lastPathComponent).")
     }
 }

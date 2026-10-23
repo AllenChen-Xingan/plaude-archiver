@@ -98,10 +98,13 @@ enum Crypto {
             var len = Int(b[i]); i += 1
             if len & 0x80 != 0 {
                 let n = len & 0x7f
+                guard n <= 4, i + n <= b.count else { throw CryptoError.message("DER bad length") }
                 len = 0
                 for _ in 0..<n { len = (len << 8) | Int(b[i]); i += 1 }
             }
-            let start = i; i += len
+            let start = i
+            guard len >= 0, start + len <= b.count else { throw CryptoError.message("DER length overflow") }
+            i += len
             return (tag, start, len)
         }
         let seq = try readTLV()                 // SEQUENCE PrivateKeyInfo
@@ -202,11 +205,15 @@ enum Crypto {
             throw CryptoError.message("header version \(version) not supported (version 2 = ECDH, protocol 30)")
         }
         let headerSize = u16(10)
+        guard headerSize >= 512, headerSize <= data.count else {
+            throw CryptoError.message("bad header size \(headerSize)")
+        }
         let counter = u32(128)
         let nonce = data.subdata(in: 132..<144)
         let keyCipher = data.subdata(in: 256..<512)
         var contentKey = try rsaDecryptPKCS1(keyCipher, key: privateKey)
         if contentKey.count > 32 { contentKey = contentKey.suffix(32) }  // firmware anomaly fallback
+        guard contentKey.count == 32 else { throw CryptoError.message("content key wrong length") }
         let body = data.subdata(in: headerSize..<data.count)
         return chacha20(body, key: contentKey, nonce: nonce, counter: counter)
     }

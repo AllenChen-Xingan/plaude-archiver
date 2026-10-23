@@ -28,7 +28,10 @@ struct PlaudAPI {
     {
         var currentHost = host
         for _ in 0..<2 {
-            var req = URLRequest(url: URL(string: currentHost + path)!)
+            guard let url = URL(string: currentHost + path) else {
+                throw APIError.message("bad API host: \(currentHost)")
+            }
+            var req = URLRequest(url: url)
             req.httpMethod = method
             req.setValue("Bearer " + userToken, forHTTPHeaderField: "Authorization")
             req.setValue("web", forHTTPHeaderField: "app-platform")

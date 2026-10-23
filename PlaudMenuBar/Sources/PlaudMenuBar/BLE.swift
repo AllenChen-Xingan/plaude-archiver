@@ -43,16 +43,24 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     // MARK: connection
 
     func connect(timeout: TimeInterval = 25) async throws {
-        if central.state != .poweredOn { try await awaitStep(.power, timeout) }
-        guard central.state == .poweredOn else { throw BLEError.message("Bluetooth not available") }
-        log("Scanning for a Plaud device…")
-        // The device advertises service 0x504C (and the full 0x1910 is only visible after
-        // connecting), so scan broadly and match in didDiscover.
-        central.scanForPeripherals(withServices: nil, options: nil)
-        try await awaitStep(.connect, timeout)
-        log("Connected. Discovering services…")
-        try await awaitStep(.ready, timeout)
-        log("Ready\(discoveredName.map { " (\($0))" } ?? "").")
+        do {
+            if central.state != .poweredOn { try await awaitStep(.power, timeout) }
+            guard central.state == .poweredOn else { throw BLEError.message("Bluetooth not available") }
+            log("Scanning for a Plaud device…")
+            // The device advertises service 0x504C (and the full 0x1910 is only visible after
+            // connecting), so scan broadly and match in didDiscover.
+            central.scanForPeripherals(withServices: nil, options: nil)
+            try await awaitStep(.connect, timeout)
+            log("Connected. Discovering services…")
+            try await awaitStep(.ready, timeout)
+            log("Ready\(discoveredName.map { " (\($0))" } ?? "").")
+        } catch {
+            // Don't leave the central scanning or a peripheral half-connected on failure.
+            central.stopScan()
+            if let p = peripheral { central.cancelPeripheralConnection(p) }
+            peripheral = nil; writeChar = nil; notifyChar = nil
+            throw error
+        }
     }
 
     func disconnect() {
@@ -94,18 +102,21 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
     func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        guard peripheral == nil else { return }   // already connecting to one
         let name = p.name ?? (advertisementData[CBAdvertisementDataLocalNameKey] as? String)
         let uuids = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID]) ?? []
-        let mfg = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
-        let serial = mfg.flatMap { BLEManager.serial(fromManufacturerData: $0) }
+        // Require a strong Plaud signal: the service UUID or a Plaud name. The manufacturer-data
+        // serial is NOT enough to match on — its loose hex heuristic fires on unrelated beacons,
+        // and a wrong connect stops the scan and then stalls until timeout.
         let isPlaud = uuids.contains(CBUUID(string: "504C")) || uuids.contains(CBUUID(string: Proto.service))
-            || (name?.lowercased().contains("plaud") ?? false) || serial != nil
-        guard isPlaud else { return }   // ignore non-Plaud devices, keep scanning
+            || (name?.lowercased().contains("plaud") ?? false)
+        guard isPlaud else { return }   // not a Plaud device; keep scanning
         c.stopScan()
         peripheral = p
         discoveredName = name
-        discoveredSerial = serial
-        log("Found \(name ?? "device")\(serial.map { " (serial \($0))" } ?? "").")
+        discoveredSerial = (advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data)
+            .flatMap { BLEManager.serial(fromManufacturerData: $0) }
+        log("Found \(name ?? "device")\(discoveredSerial.map { " (serial \($0))" } ?? "").")
         p.delegate = self
         c.connect(p, options: nil)
     }
@@ -308,9 +319,13 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             let n = Int(pkt[pkt.startIndex.advanced(by: i + 4)])
             let start = pkt.startIndex.advanced(by: i + 5)
             let chunk = pkt.subdata(in: start..<min(start.advanced(by: n), pkt.endIndex))
-            if Int(offset) != data.count { break }
+            if Int(offset) != data.count { break }   // gap: stop here; the size check below fails
             data.append(chunk)
             onProgress(data.count, Int(rec.size))
+        }
+        // A dropped packet ends the loop early; don't present a short file as complete.
+        if rec.size > 0, data.count != Int(rec.size) {
+            throw BLEError.message("incomplete download: got \(data.count) of \(rec.size) bytes")
         }
         return data
     }

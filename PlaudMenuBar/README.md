@@ -26,6 +26,8 @@ A waveform icon appears in the menu bar. From its menu:
 
 On first Bluetooth use, macOS asks to allow Bluetooth for the app. Allow it.
 
+> `build.sh` ad-hoc signs the app (`codesign --sign -`), which gives it a new code identity on every rebuild. macOS ties the Bluetooth permission to that identity, so after a rebuild it may ask for Bluetooth access again. That's expected. To make the grant stick, sign with a stable Developer ID instead.
+
 ## How it works
 
 - `LoginWindow.swift` — WKWebView + cookie capture of the `pld_ut` (UT) token.
