@@ -153,7 +153,7 @@ struct StorageBar: View {
     var body: some View {
         Group {
             if let s = storage, s.total > 0 {
-                let used = Double(s.total - s.free) / Double(s.total)
+                let used = Double(s.total - min(s.free, s.total)) / Double(s.total)   // guard free > total
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("Storage").font(.caption).foregroundStyle(.secondary)
@@ -181,17 +181,6 @@ struct DeviceTab: View {
                 if let b = model.battery { row("Battery", "\(b.level)%\(b.charging ? " (charging)" : "")") }
                 if let s = model.storage, s.total > 0 {
                     row("Free space", ByteCountFormatter.string(fromByteCount: Int64(s.free), countStyle: .file))
-                }
-            }
-            Section("Recording") {
-                if let r = model.recordingState, r.recording {
-                    HStack {
-                        Label("Recording now", systemImage: "record.circle").foregroundStyle(.red)
-                        Spacer()
-                        Button("Stop", role: .destructive) { model.stopRecording() }.disabled(model.busy)
-                    }
-                } else {
-                    Text("Not recording").foregroundStyle(.secondary)
                 }
             }
         }

@@ -18,6 +18,24 @@ struct PlaudApp {
             } catch { FileHandle.standardError.write(Data("selftest error: \(error)\n".utf8)); exit(1) }
         }
 
+        // Hidden read-only device probe: connect, read status, list recordings; never deletes.
+        if args.contains("--probe-device") {
+            let model = DeviceModel()
+            Task {
+                do {
+                    let report = try await model.probe()
+                    FileHandle.standardOutput.write(Data((report + "\n").utf8))
+                    exit(0)
+                } catch {
+                    FileHandle.standardError.write(Data("probe error: \(error)\n".utf8))
+                    exit(1)
+                }
+            }
+            // Spin the main run loop so CoreBluetooth (queue: nil = main) delivers callbacks.
+            RunLoop.main.run()
+            return
+        }
+
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

@@ -18,6 +18,18 @@ final class LoginWindow: NSObject, WKNavigationDelegate, NSWindowDelegate {
     }
 
     func show() {
+        // If a prior login's cookie is still in the jar, sign in silently — no window flash.
+        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { [weak self] cookies in
+            guard let self, !self.done else { return }
+            if let ut = cookies.first(where: { $0.name == "pld_ut" && !$0.value.isEmpty }) {
+                self.finish(token: ut.value)
+            } else {
+                self.presentWindow()
+            }
+        }
+    }
+
+    private func presentWindow() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()   // persistent: a prior login is remembered
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 960, height: 720), configuration: config)

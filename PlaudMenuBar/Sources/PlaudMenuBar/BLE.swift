@@ -136,6 +136,8 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         resolveStep(.failure(BLEError.message("device disconnected")))
         failWaiter(BLEError.message("device disconnected"))
+        // Clear state so the next connect() isn't blocked by the stale peripheral guard.
+        peripheral = nil; writeChar = nil; notifyChar = nil; session = nil
     }
 
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
@@ -281,6 +283,7 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     func listSessions() async throws -> [RecordingInfo] {
         try send(Proto.sessionList())
         var files: [RecordingInfo] = []
+        var seen = Set<UInt32>()
         var total: Int? = nil
         while total == nil || files.count < total! {
             let b = try await waitCommand([Proto.CMD_GET_REC_SESSIONS], timeout: 15)
@@ -293,7 +296,7 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             while off + entry <= b.count {
                 let sid = le32(b, b.startIndex.advanced(by: off))
                 let size = le32(b, b.startIndex.advanced(by: off + 4))
-                files.append(RecordingInfo(sessionId: sid, size: size))
+                if seen.insert(sid).inserted { files.append(RecordingInfo(sessionId: sid, size: size)) }
                 off += entry
             }
         }

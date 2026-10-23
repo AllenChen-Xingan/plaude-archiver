@@ -24,7 +24,6 @@ final class DeviceModel: ObservableObject {
     @Published var recordings: [Recording] = []
     @Published var storage: StorageInfo?
     @Published var battery: Battery?
-    @Published var recordingState: RecordingState?
     @Published var connected = false
     @Published var busy = false
     @Published var status = "Not connected"
@@ -32,17 +31,19 @@ final class DeviceModel: ObservableObject {
     @Published var serial: String?
     @Published var signedIn = false
     @Published var deleteAfterDownload = false {
-        didSet { store.deleteAfterSync = deleteAfterDownload; store.save() }
+        didSet { guard loaded else { return }; store.deleteAfterSync = deleteAfterDownload; store.save() }
     }
 
     private var store = Store.load()
     private let ble = BLEManager()
     private var login: LoginWindow?
     private var privKey: SecKey?
+    private var loaded = false   // suppresses the didSet write during init
 
     init() {
         signedIn = store.userToken != nil
         deleteAfterDownload = store.deleteAfterSync
+        loaded = true
         ble.onLog = { [weak self] s in self?.status = s }
     }
 
@@ -83,7 +84,7 @@ final class DeviceModel: ObservableObject {
         store = Store()
         store.save()
         signedIn = false; connected = false
-        recordings = []; storage = nil; battery = nil; recordingState = nil
+        recordings = []; storage = nil; battery = nil
         status = "Signed out."
     }
 
@@ -130,6 +131,26 @@ final class DeviceModel: ObservableObject {
         status = "Disconnected."
     }
 
+    // Headless read-only check of the live device ops (for --probe-device). Never deletes.
+    func probe() async throws -> String {
+        try await ensureReady()
+        var out = ["connected: \(ble.discoveredName ?? "?")  serial=\(serial ?? "?")"]
+        if let s = try? await ble.getStorage() {
+            out.append("storage: free=\(s.free) total=\(s.total) duration=\(s.durationSeconds)")
+        } else { out.append("storage: (no reply)") }
+        if let b = try? await ble.getBattery() {
+            out.append("battery: \(b.level)% charging=\(b.charging)")
+        } else { out.append("battery: (no reply)") }
+        if let r = try? await ble.getRecordingState() {
+            out.append("recording: \(r.recording) sessionId=\(r.sessionId)")
+        } else { out.append("recording: (no reply)") }
+        let files = try await ble.listSessions()
+        out.append("recordings: \(files.count)")
+        for f in files.prefix(10) { out.append("  session \(f.sessionId) (\(dateText(f.sessionId)))  \(f.size) bytes") }
+        ble.disconnect()
+        return out.joined(separator: "\n")
+    }
+
     // MARK: actions
 
     private func run(_ label: String, _ op: @escaping () async throws -> Void) {
@@ -148,11 +169,12 @@ final class DeviceModel: ObservableObject {
             self.status = "Reading device…"
             self.storage = try? await self.ble.getStorage()
             self.battery = try? await self.ble.getBattery()
-            self.recordingState = try? await self.ble.getRecordingState()
             let files = try await self.ble.listSessions()
             let existing = Dictionary(uniqueKeysWithValues: self.recordings.map { ($0.sessionId, $0) })
             self.recordings = files.map { f in
-                if var r = existing[f.sessionId] { r = Recording(sessionId: f.sessionId, sizeBytes: Int(f.size), state: r.state, localURL: r.localURL); return r }
+                if let r = existing[f.sessionId] {
+                    return Recording(sessionId: f.sessionId, sizeBytes: Int(f.size), state: r.state, localURL: r.localURL)
+                }
                 let url = self.localURL(for: f.sessionId)
                 let onDisk = FileManager.default.fileExists(atPath: url.path)
                 return Recording(sessionId: f.sessionId, sizeBytes: Int(f.size),
@@ -174,8 +196,7 @@ final class DeviceModel: ObservableObject {
     func download(_ sessionId: UInt32) {
         run("download") {
             try await self.ensureReady()
-            try await self.downloadOne(sessionId)
-            self.status = "Downloaded."
+            try await self.downloadOne(sessionId)   // sets its own final status
         }
     }
 
@@ -186,15 +207,6 @@ final class DeviceModel: ObservableObject {
             self.mark(sessionId, .deleted)
             self.storage = try? await self.ble.getStorage()
             self.status = "Deleted from device."
-        }
-    }
-
-    func stopRecording() {
-        run("stop") {
-            try await self.ensureReady()
-            try await self.ble.stopRecording()
-            self.recordingState = try? await self.ble.getRecordingState()
-            self.status = "Recording stopped."
         }
     }
 
@@ -210,15 +222,21 @@ final class DeviceModel: ObservableObject {
         let dir = store.defaultDownloadDir
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try raw.write(to: dir.appendingPathComponent("plaud_\(sessionId).plaud"))
-        let ogg = localURL(for: sessionId)
-        if raw.prefix(8) == Data("PLAUD.AI".utf8) {
-            try Crypto.decryptRecordingFile(raw, privateKey: key).write(to: ogg)
+        // Only a verified decrypt counts as a safe local copy. If the device ever returns an
+        // unexpected format, keep the raw .plaud and NEVER delete the device's copy.
+        guard raw.prefix(8) == Data("PLAUD.AI".utf8) else {
+            status = "Saved an encrypted copy in an unexpected format — keeping it on the device."
+            return
         }
+        let ogg = localURL(for: sessionId)
+        try Crypto.decryptRecordingFile(raw, privateKey: key).write(to: ogg)
         updateLocal(sessionId, url: ogg)
+        status = "Downloaded \(dateText(sessionId))."
         if deleteAfterDownload {
             try await ble.deleteRecording(sessionId)
             mark(sessionId, .deleted)
             storage = try? await ble.getStorage()
+            status = "Downloaded and removed \(dateText(sessionId)) from the device."
         }
     }
 
