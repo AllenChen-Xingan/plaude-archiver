@@ -1,0 +1,22 @@
+# Swift build output
+PlaudMenuBar/.build/
+PlaudMenuBar/PlaudMenuBar.app/
+*.xcodeproj
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Recordings and device secrets — never commit these
+plaud-ble/
+plaud-recordings/
+*.plaud
+*.ogg
+secrets/
+state.json
+*.pem
+sn_signature.json
+
+# macOS
+.DS_Store
