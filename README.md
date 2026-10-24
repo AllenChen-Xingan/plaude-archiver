@@ -47,7 +47,7 @@ A waveform icon lives in your menu bar. Open it for a small dashboard:
   - Download, show in Finder, or delete each recording. **Download all** gets the rest, and you can cancel a download.
   - **Record**, pause, resume and stop a recording on the device. The new recording shows up in the list when you stop.
   - **Delete all** re-reads the device first. It deletes nothing if the device holds a recording you have not seen in the list, or is recording.
-- **Device**: live status (serial, battery, free space, recording state, pending firmware update), rename the device, and the device's own settings. You can change auto record, auto sync, iBeacon wake-up, auto power off and battery mode. The others the device reports are shown read-only.
+- **Device**: live status (serial, battery, free space, recording state, pending firmware update), rename the device, and the device's own settings. You can change auto record, iBeacon wake-up, auto power off and battery mode. The others the device reports are shown read-only. The app leaves out "auto sync" on purpose: in the Plaud app it is "Sync in idle", which lets the recorder upload to Plaud's cloud over Wi-Fi.
 - **Settings**: download folder, **"delete from device after download"** to stop the device filling up, and sign out.
 
 Downloads are built to never lose a recording:
@@ -106,7 +106,7 @@ open -n -W --stdout /tmp/out.txt --stderr /tmp/err.txt "Plaude Archiver.app" --a
 |------|------|
 | `--probe-device` | Reads status and lists recordings. Changes nothing. |
 | `--probe-settings` | Reads every setting and every read command, and prints the raw replies. Changes nothing. |
-| `--probe-features [--resume-from <plaud_ID.plaud>]` | Sets the clock, writes the name back unchanged, changes 5 settings and restores each one, and tests resume, the integrity check and cancel. With `--resume-from`, it also re-downloads that recording into your download folder. |
+| `--probe-features [--resume-from <plaud_ID.plaud>]` | Sets the clock, writes the name back unchanged, changes 4 settings and restores each one, and tests resume, the integrity check and cancel. With `--resume-from`, it also re-downloads that recording into your download folder. |
 | `--test-recording` | Starts, pauses, resumes and stops a recording. **Leaves a short recording on the device.** |
 | `--selftest` | Downloads the smallest recording, verifies it, then **deletes it from the device**. |
 

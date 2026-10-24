@@ -10,7 +10,7 @@ Tested on a Note Pro (serial prefix 881, protocol 20) with the app's hidden mode
 |---|---|---|
 | Set the clock | 4: `[unix u32][tz hours i8][tz minutes i8]` | works |
 | Common settings, read | 8: `[1][setting u16]`, reply `[setting u16][value u32]`, `0xFFFFFFFF` = not on this device | 12 of 34 settings: 4, 15, 18, 19, 20, 23, 24, 25, 26, 27, 32, 49 |
-| Common settings, write | 8: `[2][setting u16][value u32]` | accepted: 23 auto power off (0, 4, 5 tried; 1 = "shut down" not tried), 25 auto record (it did not start a recording), 26 auto sync, 32 battery mode (0, 1, 2 tried), 49 iBeacon wake-up. Kept at 0 whatever is written: 15 voice detection, 24 save raw audio |
+| Common settings, write | 8: `[2][setting u16][value u32]` | accepted: 23 auto power off (0, 4, 5 tried; 1 = "shut down" not tried), 25 auto record (it did not start a recording within about 1 s; what it does is not known), 26 auto sync (see below), 32 battery mode (0, 1, 2 tried), 49 iBeacon wake-up. Kept at 0 whatever is written: 15 voice detection, 24 save raw audio |
 | Recording state | 3: `[code u32 @3][privacy @7][key @8][scene @10][session u32 @11]` | code 4099 while recording, 1 when idle. Pause does not change it |
 | Start / pause / resume / stop | 20 `[1][0]`, 21 / 22 `[session u32][0]`, 23 `[1][0]` | all work. A 4 s + 2 s paused + 3 s test gave 7.6 s of audio |
 | Device name, read / write | 108 / 107 (32 bytes, reply 108) | works |
@@ -21,7 +21,11 @@ Tested on a Note Pro (serial prefix 881, protocol 20) with the app's hidden mode
 | Device events | 19 (device to app) | none arrived during a recording |
 | Bookmarks / tags | 35, 38 | no reply |
 | LED | 24 / 25 | replies, but the state never changes |
-| No reply at all | 2, 15, 54, 106, 122, 131, 147, 149, 150, 152 | includes all Wi-Fi commands: the Note Pro has no Wi-Fi |
+| No reply at all | 2, 15, 54, 106, 122, 131, 147, 149, 150, 152 | includes the Wi-Fi reads (15, 122). That does not prove the Note Pro has no Wi-Fi: its handshake reply flags Wi-Fi support, and the reads may need Wi-Fi turned on first (`openWiFi`, cmd 16), which was not tried |
+
+**Auto sync (26) uploads to Plaud's cloud.** The Plaud app writes it from `setSyncInIdleState`, in a command group that also saves, tests and deletes Wi-Fi networks on the device. The app's own text for the NotePin: "auto-uploads recordings to your cloud when charging and connected to saved Wi-Fi". The archiver does not offer this setting.
+
+**Auto record (25) has no description in the app.** Every "auto record" text in the app is for Plaud One earbuds ("Automatically records every call or meeting through your earbuds"), and that screen writes auto *call* record (37), not 25.
 
 Two corrections to older notes in this repo: stop recording is cmd 23 (145 stops a device-log transfer), and the recording state above replaces the old reading of byte 7 as "recording" (byte 7 is the privacy flag).
 

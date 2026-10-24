@@ -345,10 +345,11 @@ final class DeviceModel: ObservableObject {
         for def in DeviceSetting.all {
             out.append("setting \(def.id) \(def.label): \(await text { try await self.ble.readSetting(def.id) })")
         }
-        // Change each editable setting, read it back, then restore it. Skipped: "Shut down" for
+        // Change each editable setting, read it back, then restore it. Auto sync (26) is not written:
+        // it would let the device upload to Plaud's cloud. Skipped: "Shut down" for
         // auto power off (it could switch the device off). Auto record is on for about a second.
         let flips: [(UInt16, String, (UInt32) -> UInt32)] = [
-            (26, "auto sync", { 1 - min($0, 1) }), (25, "auto record", { 1 - min($0, 1) }),
+            (25, "auto record", { 1 - min($0, 1) }),
             (49, "iBeacon wake-up", { 1 - min($0, 1) }),
             (23, "auto power off", { $0 == 5 ? 4 : 5 }), (32, "battery mode", { $0 == 2 ? 0 : 2 }),
         ]
@@ -782,7 +783,8 @@ final class DeviceModel: ObservableObject {
 // 2026-10-24), with values from the official app's enums. The app's source shows no range for
 // gain, sensitivity, Find My or auto-delete, so those are shown but not written. A write test on
 // the same day: the Note Pro accepts the editable ones, and keeps "save raw audio" and
-// "voice detection" at 0 whatever is written.
+// "voice detection" at 0 whatever is written. Auto sync (26) is left out on purpose: it is the
+// Plaud app's "Sync in idle", where the device uploads recordings to Plaud's cloud over Wi-Fi.
 struct DeviceSetting: Identifiable {
     enum Kind { case toggle, choice([(UInt32, String)]), readOnly }
     let id: UInt16
@@ -794,7 +796,6 @@ struct DeviceSetting: Identifiable {
 
     static let all: [DeviceSetting] = [
         DeviceSetting(id: 25, label: "Auto record", kind: .toggle),
-        DeviceSetting(id: 26, label: "Auto sync", kind: .toggle),
         DeviceSetting(id: 24, label: "Save raw audio", kind: .readOnly, help: refused),
         DeviceSetting(id: 15, label: "Voice detection", kind: .readOnly, help: refused),
         DeviceSetting(id: 49, label: "iBeacon wake-up", kind: .toggle),

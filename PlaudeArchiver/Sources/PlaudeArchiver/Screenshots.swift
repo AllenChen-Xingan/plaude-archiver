@@ -49,7 +49,7 @@ enum Screenshots {
         m.storage = StorageInfo(free: 41_300_000_000, total: 64_000_000_000, durationSeconds: 0)
         m.recordingState = RecordingState(state: .idle, sessionId: 0, rawCode: 0, rawKey: 0)
         m.settingsLoaded = true
-        m.settingValues = [25: 0, 26: 1, 24: 0, 15: 0, 49: 1, 23: 3, 32: 0, 20: 0, 19: 0, 18: 0, 27: 2, 4: 1]
+        m.settingValues = [25: 0, 24: 0, 15: 0, 49: 1, 23: 3, 32: 0, 20: 0, 19: 0, 18: 0, 27: 2, 4: 1]
         // (day, hour, minute) in October 2026, size in bytes, state
         let sample: [(Int, Int, Int, Int, Recording.State)] = [
             (24, 10, 5, 18_400_000, .onDevice), (23, 16, 40, 42_100_000, .onDevice),
