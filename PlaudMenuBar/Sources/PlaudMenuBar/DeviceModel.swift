@@ -129,9 +129,11 @@ final class DeviceModel: ObservableObject {
         let userId = PlaudAPI.subject(of: token) ?? serial
         try await ble.handshake(token: userId)
         connected = true
+        startPolling()
     }
 
     func disconnect() {
+        pollTimer?.invalidate(); pollTimer = nil
         ble.disconnect()
         connected = false
         status = "Disconnected."
@@ -198,13 +200,37 @@ final class DeviceModel: ObservableObject {
 
     // MARK: actions
 
+    // `bleBusy` serializes every BLE operation (so the background poll can't collide with a
+    // user action); `busy` is only the UI flag for user-initiated work.
+    private var bleBusy = false
+    private var pollTimer: Timer?
+
     private func run(_ label: String, _ op: @escaping () async throws -> Void) {
-        guard !busy else { return }
-        busy = true
+        guard !bleBusy else { return }
+        bleBusy = true; busy = true
         Task {
             do { try await op() }
             catch { status = "Error: \(error)"; connected = ble.isConnected }
-            busy = false
+            busy = false; bleBusy = false
+        }
+    }
+
+    // Quietly refresh live status (battery, storage) while the window is open. No UI busy flag,
+    // no status text, and skipped whenever a real operation holds the BLE link.
+    private func startPolling() {
+        pollTimer?.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pollStatus() }
+        }
+    }
+
+    private func pollStatus() {
+        guard connected, !bleBusy, ble.isConnected else { return }
+        bleBusy = true
+        Task {
+            self.battery = try? await self.ble.getBattery()
+            self.storage = try? await self.ble.getStorage()
+            self.bleBusy = false
         }
     }
 

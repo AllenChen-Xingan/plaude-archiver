@@ -7,7 +7,6 @@ struct DashboardView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
             if !model.signedIn {
                 signedOut
             } else {
@@ -74,8 +73,6 @@ struct RecordingsTab: View {
         VStack(spacing: 0) {
             StorageBar(storage: model.storage)
             HStack {
-                Toggle("Delete from device after download", isOn: $model.deleteAfterDownload)
-                    .toggleStyle(.checkbox).font(.callout)
                 Spacer()
                 Button("Download all") { model.downloadAll() }
                     .disabled(model.busy || !model.recordings.contains { $0.state == .onDevice })
