@@ -106,9 +106,15 @@ final class DeviceModel: ObservableObject {
 
         status = "Connecting to the device…"
         try await ble.connect()
-        guard let serial = ble.discoveredSerial else { throw BLEError.message("could not read the device serial") }
-        self.serial = serial
         self.deviceName = ble.discoveredName
+        // Serial may be missing from the advert that matched; fall back to the last one we saw,
+        // or the single device we already have a signature for.
+        let cachedSingle = store.snSignatures.count == 1 ? store.snSignatures.keys.first : nil
+        guard let serial = ble.discoveredSerial ?? store.lastSerial ?? cachedSingle else {
+            throw BLEError.message("could not read the device serial")
+        }
+        self.serial = serial
+        store.lastSerial = serial; store.save()
         if store.snSignatures[serial] == nil {
             status = "Authorising the device…"
             let s = try await api.snSign(serial: serial)
@@ -129,6 +135,45 @@ final class DeviceModel: ObservableObject {
         ble.disconnect()
         connected = false
         status = "Disconnected."
+    }
+
+    // Headless full-loop self-test (for --selftest): connect, read status, list, then
+    // download + verify ONE recording and delete it from the device. Lossless: the delete
+    // only runs after a decrypted .ogg (>0 bytes) is confirmed on disk.
+    func selfTest() async throws -> String {
+        try await ensureReady()
+        guard let key = privKey else { throw BLEError.message("no key") }
+        var out = ["connected: \(ble.discoveredName ?? "?") serial=\(serial ?? "?")"]
+        let before = try? await ble.getStorage()
+        if let s = before { out.append("storage before: free=\(s.free) total=\(s.total)") }
+        var files = try await ble.listSessions()
+        out.append("recordings before: \(files.count) -> \(files.map { $0.sessionId })")
+        guard let target = files.min(by: { $0.size < $1.size }) else { return (out + ["no recordings to test with"]).joined(separator: "\n") }
+        out.append("target: session \(target.sessionId) (\(target.size) bytes)")
+
+        let raw = try await ble.pullFile(target) { _, _ in }
+        guard raw.prefix(8) == Data("PLAUD.AI".utf8) else { throw BLEError.message("unexpected file format; aborting before delete") }
+        let dir = store.defaultDownloadDir
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try raw.write(to: dir.appendingPathComponent("plaud_\(target.sessionId).plaud"))
+        let ogg = localURL(for: target.sessionId)
+        let clear = try Crypto.decryptRecordingFile(raw, privateKey: key)
+        try clear.write(to: ogg)
+        let n = ((try? FileManager.default.attributesOfItem(atPath: ogg.path)[.size]) as? Int) ?? 0
+        guard n > 0 else { throw BLEError.message("decrypted file empty; aborting before delete") }
+        out.append("downloaded + decrypted: \(n) bytes -> \(ogg.lastPathComponent) (verified copy on disk)")
+
+        out.append("deleting session \(target.sessionId) from device…")
+        try await ble.deleteRecording(target.sessionId)
+        files = try await ble.listSessions()
+        let gone = !files.contains { $0.sessionId == target.sessionId }
+        out.append("recordings after: \(files.count) -> \(files.map { $0.sessionId })")
+        out.append(gone ? "DELETE CONFIRMED: session no longer on device ✓" : "DELETE FAILED: session still listed ✗")
+        if let s = try? await ble.getStorage(), let b = before {
+            out.append("storage after: free=\(s.free) (reclaimed \(Int64(s.free) - Int64(b.free)) bytes)")
+        }
+        ble.disconnect()
+        return out.joined(separator: "\n")
     }
 
     // Headless read-only check of the live device ops (for --probe-device). Never deletes.

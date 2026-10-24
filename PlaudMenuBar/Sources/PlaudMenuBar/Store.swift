@@ -10,6 +10,7 @@ struct Store: Codable {
     var snSignatures: [String: String] = [:]   // serial -> base64 signature
     var downloadDir: String?      // where recordings are saved
     var deleteAfterSync = false   // delete each recording from the device after a verified download
+    var lastSerial: String?       // last serial seen, so a reconnect works even if the advert omits it
 
     static var dir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

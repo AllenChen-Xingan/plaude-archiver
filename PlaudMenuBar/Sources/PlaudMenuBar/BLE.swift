@@ -117,8 +117,13 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         c.stopScan()
         peripheral = p
         discoveredName = name
-        discoveredSerial = (advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data)
-            .flatMap { BLEManager.serial(fromManufacturerData: $0) }
+        // The serial lives in the manufacturer-data packet, which isn't always the same
+        // advertisement that carried the name/service. Only set it when this packet has it;
+        // don't clobber a serial learned from an earlier advert or connection.
+        if let s = (advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data)
+            .flatMap({ BLEManager.serial(fromManufacturerData: $0) }) {
+            discoveredSerial = s
+        }
         log("Found \(name ?? "device")\(discoveredSerial.map { " (serial \($0))" } ?? "").")
         p.delegate = self
         c.connect(p, options: nil)

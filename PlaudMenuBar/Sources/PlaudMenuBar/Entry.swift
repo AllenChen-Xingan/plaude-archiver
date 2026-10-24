@@ -19,11 +19,12 @@ struct PlaudApp {
         }
 
         // Hidden read-only device probe: connect, read status, list recordings; never deletes.
-        if args.contains("--probe-device") {
+        if args.contains("--probe-device") || args.contains("--selftest") {
+            let full = args.contains("--selftest")
             let model = DeviceModel()
             Task {
                 do {
-                    let report = try await model.probe()
+                    let report = try await (full ? model.selfTest() : model.probe())
                     FileHandle.standardOutput.write(Data((report + "\n").utf8))
                     exit(0)
                 } catch {

@@ -129,8 +129,11 @@ struct RecordingRow: View {
                 Text("deleted").font(.caption).foregroundStyle(.secondary)
             } else {
                 if rec.state == .downloaded, let url = rec.localURL {
-                    Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "play.circle") }
-                        .buttonStyle(.borderless).help("Play")
+                    // Reveal in Finder rather than open: .ogg/Opus needs a capable player
+                    // (e.g. VLC), and launching a missing/Intel-only handler just errors.
+                    Button { NSWorkspace.shared.activateFileViewerSelecting([url]) } label: {
+                        Image(systemName: "magnifyingglass.circle")
+                    }.buttonStyle(.borderless).help("Show in Finder")
                 }
                 Button { model.download(rec.sessionId) } label: {
                     Image(systemName: rec.state == .downloaded ? "arrow.down.circle.fill" : "arrow.down.circle")
