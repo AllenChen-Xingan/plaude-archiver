@@ -217,4 +217,41 @@ enum Crypto {
         let body = data.subdata(in: headerSize..<data.count)
         return chacha20(body, key: contentKey, nonce: nonce, counter: counter)
     }
+
+    // MARK: Ogg integrity
+
+    // True when `data` is a whole Ogg stream: pages back to back to the last byte, every page's
+    // CRC-32 correct, and the last page marked end-of-stream. The recording cipher (ChaCha20) has
+    // no authentication tag, so a damaged download still "decrypts"; this is the check that a
+    // local copy is safe before the device's copy is deleted.
+    static func isCompleteOgg(_ data: Data) -> Bool {
+        let d = [UInt8](data)
+        var i = 0
+        var lastHeaderType: UInt8 = 0
+        while i < d.count {
+            guard i + 27 <= d.count, d[i] == 0x4F, d[i + 1] == 0x67, d[i + 2] == 0x67, d[i + 3] == 0x53 else { return false }
+            let segments = Int(d[i + 26])
+            guard i + 27 + segments <= d.count else { return false }
+            let body = d[(i + 27)..<(i + 27 + segments)].reduce(0) { $0 + Int($1) }
+            let size = 27 + segments + body
+            guard i + size <= d.count else { return false }
+            let stored = UInt32(d[i + 22]) | UInt32(d[i + 23]) << 8 | UInt32(d[i + 24]) << 16 | UInt32(d[i + 25]) << 24
+            var crc: UInt32 = 0
+            for k in i..<(i + size) {
+                let byte = (k >= i + 22 && k < i + 26) ? 0 : d[k]   // the CRC field counts as zero
+                crc = (crc << 8) ^ oggCRCTable[Int((crc >> 24) ^ UInt32(byte))]
+            }
+            guard crc == stored else { return false }
+            lastHeaderType = d[i + 5]
+            i += size
+        }
+        return !d.isEmpty && lastHeaderType & 0x04 != 0
+    }
+
+    // CRC-32 with polynomial 0x04C11DB7, not reflected, initial value 0 (the Ogg spec).
+    private static let oggCRCTable: [UInt32] = (0..<256).map { n in
+        var c = UInt32(n) << 24
+        for _ in 0..<8 { c = c & 0x8000_0000 != 0 ? (c << 1) ^ 0x04C1_1DB7 : c << 1 }
+        return c
+    }
 }

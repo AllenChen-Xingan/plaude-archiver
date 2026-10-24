@@ -9,10 +9,16 @@ enum BLEError: Error, CustomStringConvertible {
     case message(String)   // link or protocol trouble; a fresh connection may fix it
     case timeout(String)   // the device or the radio did not answer in time
     case fatal(String)     // a retry now will not help (permission, Bluetooth off, not found, refused)
+    case cancelled         // the user stopped it
     var description: String {
-        switch self { case .message(let m), .timeout(let m), .fatal(let m): return m }
+        switch self {
+        case .message(let m), .timeout(let m), .fatal(let m): return m
+        case .cancelled: return "cancelled"
+        }
     }
-    var isRetryable: Bool { if case .fatal = self { return false }; return true }
+    var isRetryable: Bool {
+        switch self { case .fatal, .cancelled: return false; default: return true }
+    }
 }
 
 @MainActor
@@ -47,12 +53,16 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     var onLog: (String) -> Void = { _ in }
     // Called when an established link drops without us asking (out of range, device off, Bluetooth off).
     var onLinkLost: () -> Void = {}
+    // Called for each event the device pushes (recording progress, bookmark, new file).
+    var onEvent: (DeviceEvent) -> Void = { _ in }
     private(set) var discoveredName: String?
     private(set) var discoveredSerial: String?
 
     private static let serviceUUID = CBUUID(string: Proto.service)
     private static let advertUUID = CBUUID(string: "504C")
-    private static let knownIdKey = "lastPeripheralId"
+    // Renamed from "lastPeripheralId": builds before 2026-10-24 saved that one before the unlock,
+    // so it may name a stranger's device.
+    private static let knownIdKey = "lastHandshakenPeripheralId"
 
     override init() {
         super.init()
@@ -68,8 +78,11 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
     // Find, connect and prepare the GATT link. Always starts from a clean state, so it is safe
     // to call again after any failure.
-    func connect() async throws {
+    // `knownSerials`: serials this account has a signature for. A device that advertises one of
+    // them is preferred over any other Plaud-looking advertiser nearby.
+    func connect(knownSerials: Set<String> = []) async throws {
         tearDown()
+        self.knownSerials = knownSerials
         do {
             if central.state != .poweredOn {
                 do { try await awaitStep(.power, 10, "power") {} }
@@ -91,7 +104,6 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             let p = try await findPeripheral()
             peripheral = p
             p.delegate = self
-            UserDefaults.standard.set(p.identifier.uuidString, forKey: BLEManager.knownIdKey)
 
             log("Connecting to \(discoveredName ?? "the device")…")
             try await awaitStep(.connect, 15, "The device did not accept the connection.") {
@@ -126,6 +138,8 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     // A device the Mac already holds a link to does not advertise, so a scan would never see it.
     // Check for that first, then scan.
     private func findPeripheral() async throws -> CBPeripheral {
+        // Name and serial describe the device found in this scan only; never reuse the last one's.
+        discoveredName = nil; discoveredSerial = nil
         let held = central.retrieveConnectedPeripherals(withServices: [BLEManager.serviceUUID])
         let knownId = UserDefaults.standard.string(forKey: BLEManager.knownIdKey).flatMap(UUID.init)
         if let p = held.first(where: { $0.identifier == knownId }) ?? held.first {
@@ -135,6 +149,7 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         }
         log("Looking for a Plaude device…")
         found = nil
+        candidates.removeAll()
         // The device advertises service 0x504C (and the full 0x1910 is only visible after
         // connecting), so scan broadly and match in didDiscover.
         do {
@@ -150,8 +165,51 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             throw error
         }
         central.stopScan()
+        pickTimer?.cancel(); pickTimer = nil
         guard let p = found else { throw BLEError.message("scan ended without a device") }
         return p
+    }
+
+    // Every Plaud-looking advertiser seen in this scan. Something else nearby can look like a
+    // Plaud device, accept the connection, and never send a session key.
+    private struct Candidate { let peripheral: CBPeripheral; var name: String?; var serial: String?; var rssi: Int }
+    private var candidates: [UUID: Candidate] = [:]
+    private var pickTimer: DispatchWorkItem?
+    private var knownSerials: Set<String> = []
+
+    private var knownPeripheralId: UUID? {
+        UserDefaults.standard.string(forKey: BLEManager.knownIdKey).flatMap(UUID.init)
+    }
+    // The connected device is the one that last completed a handshake, so its saved serial applies.
+    var isKnownPeripheral: Bool { peripheral != nil && peripheral?.identifier == knownPeripheralId }
+
+    // A sure match (the last device that completed a handshake, or a serial we hold a signature
+    // for) is taken at once. A device with another serial may be a new one to authorise: wait
+    // 1.5 s for a better match, then take the strongest. A device that shows no serial is never
+    // taken: without its serial there is no signature to send, and the unlock would only hang.
+    private func consider(_ c: Candidate) {
+        if c.peripheral.identifier == knownPeripheralId || c.serial.map(knownSerials.contains) == true {
+            choose(c); return
+        }
+        guard c.serial != nil, pickTimer == nil else { return }
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.stepKind == .scan, self.found == nil else { return }
+            if let best = self.candidates.values.filter({ $0.serial != nil }).max(by: { $0.rssi < $1.rssi }) {
+                self.choose(best)
+            }
+        }
+        pickTimer = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: item)
+    }
+
+    private func choose(_ c: Candidate) {
+        pickTimer?.cancel(); pickTimer = nil
+        found = c.peripheral
+        discoveredName = c.name
+        if let s = c.serial { discoveredSerial = s }
+        log("Found \(c.name ?? "device")\(c.serial.map { " (serial \($0))" } ?? "").")
+        trace("chose \(c.peripheral.identifier) rssi \(c.rssi) from \(candidates.count) candidate(s)")
+        resolveStep(.success(()))
     }
 
     // Drop the link and every piece of per-connection state. Safe to call at any time.
@@ -164,11 +222,13 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             central.cancelPeripheralConnection(p)
         }
         peripheral = nil; writeChar = nil; notifyChar = nil; found = nil
+        pickTimer?.cancel(); pickTimer = nil
         session = nil; handshakeDone = false; portVersion = 20
         buffer.removeAll(); secretParts.removeAll(); secretTotal = nil; sawFE11 = false
         resolveStep(.failure(BLEError.message("disconnected")))
         failWaiter(BLEError.message("disconnected"))
         canSendCont?.resume(); canSendCont = nil
+        sendTail = nil
     }
 
     // Connected, unlocked and handshaken: ready for commands.
@@ -246,21 +306,22 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         // Require a strong Plaud signal: the service UUID or a Plaud name. The manufacturer-data
         // serial is NOT enough to match on — its loose hex heuristic fires on unrelated beacons,
         // and a wrong connect stops the scan and then stalls until timeout.
-        let isPlaud = uuids.contains(BLEManager.advertUUID) || uuids.contains(BLEManager.serviceUUID)
+        // The device we last completed a handshake with counts even after a rename.
+        let isPlaud = p.identifier == knownPeripheralId
+            || uuids.contains(BLEManager.advertUUID) || uuids.contains(BLEManager.serviceUUID)
             || (name?.lowercased().contains("plaud") ?? false)
         guard isPlaud else { return }   // not a Plaud device; keep scanning
-        found = p
-        discoveredName = name
         // The serial lives in the manufacturer-data packet, which isn't always the same
-        // advertisement that carried the name/service. Only set it when this packet has it;
-        // don't clobber a serial learned from an earlier advert or connection.
-        if let s = (advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data)
-            .flatMap({ BLEManager.serial(fromManufacturerData: $0) }) {
-            discoveredSerial = s
-        }
-        log("Found \(name ?? "device")\(discoveredSerial.map { " (serial \($0))" } ?? "").")
-        trace("rssi \(RSSI) id \(p.identifier)")
-        resolveStep(.success(()))
+        // advertisement that carried the name/service. Keep what earlier adverts gave.
+        let serial = (advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data)
+            .flatMap { BLEManager.serial(fromManufacturerData: $0) }
+        var c = candidates[p.identifier] ?? Candidate(peripheral: p, name: nil, serial: nil, rssi: RSSI.intValue)
+        c.name = name ?? c.name
+        c.serial = serial ?? c.serial
+        c.rssi = RSSI.intValue
+        if candidates[p.identifier] == nil { trace("candidate \(p.identifier) \(name ?? "?") serial \(serial ?? "-") rssi \(RSSI)") }
+        candidates[p.identifier] = c
+        consider(c)
     }
 
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) {
@@ -329,8 +390,35 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     // MARK: packet plumbing
 
     private func incoming(_ pkt: Data) {
+        // The device pushes events (cmd 19) on its own. They are not answers to a request, so
+        // keep them out of the reply stream.
+        if pkt.count >= 3, pkt[pkt.startIndex] == 1, cmdOf(pkt) == Proto.CMD_EVENT {
+            handleEvent(pkt)
+            return
+        }
         if let (cont, item) = waiter { waiter = nil; item.cancel(); cont.resume(returning: pkt) }
         else { buffer.append(pkt) }
+    }
+
+    // DeviceEventPushInd: [01][13 00][type u16 @3][seq u16 @5][needAck u8 @7][.. @8-10][payload @11].
+    private func handleEvent(_ pkt: Data) {
+        guard pkt.count >= 11 else { trace("short event packet \(pkt.count) bytes"); return }
+        let type = Int(le16(pkt, 3)), seq = le16(pkt, 5)
+        if pkt[pkt.startIndex + 7] == 1 {
+            // The app acknowledges with cmd 19: [type u16][seq u16], and expects no reply.
+            Task { try? await self.send(Proto.command(Proto.CMD_EVENT, Proto.u16le(UInt16(type)) + Proto.u16le(seq))) }
+        }
+        let sid = pkt.count >= 15 ? le32(pkt, pkt.startIndex.advanced(by: 11)) : 0
+        let value = pkt.count >= 19 ? le32(pkt, pkt.startIndex.advanced(by: 15)) : 0
+        let event: DeviceEvent
+        switch type {
+        case 1: event = .recordingDuration(sessionId: sid, milliseconds: value)
+        case 2: event = .bookmark(sessionId: sid)
+        case 3: event = .newFile(sessionId: sid, size: value)
+        default: event = .other(type: type)
+        }
+        trace("event \(event)")
+        onEvent(event)
     }
 
     private func failWaiter(_ err: Error) {
@@ -347,12 +435,30 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
                 self.waiter = nil
                 w.0.resume(throwing: BLEError.timeout("timed out waiting for the device"))
             }
+            // Only one reader at a time. A second one must not silently replace the first:
+            // the replaced continuation would never resume and its task would hang forever.
+            failWaiter(BLEError.message("superseded by another device request"))
             waiter = (cont, item)
             DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: item)
         }
     }
 
+    // Sends run one at a time, in call order. Each encrypted packet carries the next sequence
+    // number, and the device drops a packet whose number is lower than one it has seen. Two sends
+    // that overlap (an event ack and a command) could otherwise reach the radio out of order.
+    private var sendTail: Task<Void, Never>?
+
     private func send(_ data: Data) async throws {
+        let previous = sendTail
+        let op = Task { @MainActor () async throws in
+            _ = await previous?.value
+            try await self.sendNow(data)
+        }
+        sendTail = Task { _ = await op.result }
+        try await op.value
+    }
+
+    private func sendNow(_ data: Data) async throws {
         guard let w = writeChar, let p = peripheral, p.state == .connected else {
             throw BLEError.message("not connected")
         }
@@ -489,6 +595,8 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         guard status == 0 else { throw BLEError.fatal("The device refused the handshake (status \(status)). It may be bound to another account.") }
         if rsp.count >= 6 { portVersion = Int(rsp[rsp.startIndex + 4]) | (Int(rsp[rsp.startIndex + 5]) << 8) }
         handshakeDone = true
+        // Only a device that completed a handshake is remembered as ours.
+        if let p = peripheral { UserDefaults.standard.set(p.identifier.uuidString, forKey: BLEManager.knownIdKey) }
         log("Handshake OK (protocol \(portVersion)).")
     }
 
@@ -515,16 +623,71 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         return files
     }
 
-    func pullFile(_ rec: RecordingInfo, onProgress: (Int, Int) -> Void) async throws -> Data {
-        try await send(Proto.syncStart(session: rec.sessionId, start: 0, end: rec.size))
+    // Download one recording. `existing` holds bytes saved by an earlier, broken download; the
+    // transfer starts after them. Inside one connection, a gap or a stall restarts the transfer
+    // from the last good byte (the official app does the same). `onChunk` gets each new chunk,
+    // so the caller can save progress and resume after a disconnect.
+    func pullFile(_ rec: RecordingInfo, existing: Data = Data(), onChunk: (Data) -> Void = { _ in },
+                  onProgress: (Int, Int) -> Void) async throws -> PulledFile {
+        var data = existing
+        let total = Int(rec.size)
+        var restarts = 0, progressAtRestart = data.count
+        transferCancelled = false
+        while true {
+            var outcome = PullOutcome.gap
+            do {
+                outcome = try await pullRange(rec, from: data.count) { chunk in
+                    data.append(chunk)
+                    onChunk(chunk)
+                    onProgress(data.count, total)
+                }
+            } catch BLEError.timeout {
+                trace("transfer of \(rec.sessionId) stalled at \(data.count) of \(total)")
+            } catch BLEError.cancelled {
+                try? await stopTransfer()   // the device would otherwise keep streaming
+                throw BLEError.cancelled
+            }
+            if transferCancelled { try? await stopTransfer(); throw BLEError.cancelled }
+            if case .finished(let crc) = outcome, total == 0 || data.count == total {
+                return PulledFile(data: data, tailCRC: crc)
+            }
+            if total > 0, data.count > total {
+                throw BLEError.message("download overran: got \(data.count) of \(total) bytes")
+            }
+            if case .finished = outcome {
+                trace("transfer of \(rec.sessionId) ended early at \(data.count) of \(total)")
+            }
+            // The budget is for restarts that make no progress; a long download over a noisy
+            // link may need many restarts, each one moving forward.
+            if data.count > progressAtRestart { restarts = 0; progressAtRestart = data.count }
+            restarts += 1
+            guard restarts <= 3, peripheral?.state == .connected else {
+                // A dropped packet ends the transfer early; never present a short file as complete.
+                throw BLEError.message("incomplete download: got \(data.count) of \(total) bytes")
+            }
+            log("Resuming the download at \(data.count * 100 / max(total, 1))%…")
+            try? await stopTransfer()
+        }
+    }
+
+    private enum PullOutcome { case finished(crc: UInt16?), gap }
+
+    // One sync request from `from` to the end. Returns at the tail packet, or at the first gap.
+    private func pullRange(_ rec: RecordingInfo, from: Int, append: (Data) -> Void) async throws -> PullOutcome {
+        buffer.removeAll()   // drop stray packets from an earlier, interrupted transfer
+        try await send(Proto.syncStart(session: rec.sessionId, start: UInt32(from), end: rec.size))
         let head = try await waitCommand([Proto.CMD_SYNC_FILE_START], timeout: 15)
         if head.count > 7, head[head.startIndex + 7] > 0 {
             throw BLEError.message("device refused sync, status=\(head[head.startIndex + 7])")
         }
-        var data = Data()
+        var pos = from
         while true {
+            if transferCancelled { throw BLEError.cancelled }
             let pkt = try await nextPacket(timeout: 20)
-            if pkt.count >= 3, pkt[pkt.startIndex] == 1, cmdOf(pkt) == Proto.CMD_SYNC_FILE_TAIL { break }
+            // Tail: [01][1d 00][session u32][crc u16].
+            if pkt.count >= 3, pkt[pkt.startIndex] == 1, cmdOf(pkt) == Proto.CMD_SYNC_FILE_TAIL {
+                return .finished(crc: pkt.count >= 9 ? le16(pkt, 7) : nil)
+            }
             guard pkt.count >= 1, pkt[pkt.startIndex] == 2 else { continue }
             var i = 1
             if portVersion >= 7 {
@@ -532,20 +695,30 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
                 i = 5
             }
             guard pkt.count >= i + 5 else { continue }
-            let offset = le32(pkt, pkt.startIndex.advanced(by: i))
-            if offset == 0xFFFF_FFFF { break }
+            let offset = Int(le32(pkt, pkt.startIndex.advanced(by: i)))
+            if offset == 0xFFFF_FFFF { return .finished(crc: nil) }
             let n = Int(pkt[pkt.startIndex.advanced(by: i + 4)])
             let start = pkt.startIndex.advanced(by: i + 5)
             let chunk = pkt.subdata(in: start..<min(start.advanced(by: n), pkt.endIndex))
-            if Int(offset) != data.count { break }   // gap: stop here; the size check below fails
-            data.append(chunk)
-            onProgress(data.count, Int(rec.size))
+            if offset < pos { continue }      // a repeat of data we already have
+            if offset > pos { return .gap }   // a packet went missing
+            append(chunk)
+            pos += chunk.count
         }
-        // A dropped packet ends the loop early; don't present a short file as complete.
-        if rec.size > 0, data.count != Int(rec.size) {
-            throw BLEError.message("incomplete download: got \(data.count) of \(rec.size) bytes")
-        }
-        return data
+    }
+
+    // Stop the running download at the user's request. The transfer loop throws `.cancelled`.
+    private var transferCancelled = false
+    func cancelTransfer() {
+        transferCancelled = true
+        failWaiter(BLEError.cancelled)
+    }
+
+    // syncFileStop: cmd 29, no payload; the device answers with cmd 30.
+    func stopTransfer() async throws {
+        try await send(Proto.command(Proto.CMD_SYNC_FILE_STOP))
+        _ = try await waitCommand([Proto.CMD_SYNC_FILE_STOP_RSP], timeout: 5)
+        buffer.removeAll()
     }
 
     // MARK: helpers
@@ -578,6 +751,9 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     private func cmdOf(_ pkt: Data) -> UInt16 {
         UInt16(pkt[pkt.startIndex + 1]) | (UInt16(pkt[pkt.startIndex + 2]) << 8)
     }
+    private func le16(_ d: Data, _ o: Int) -> UInt16 {
+        UInt16(d[d.startIndex + o]) | (UInt16(d[d.startIndex + o + 1]) << 8)
+    }
     private func le32(_ d: Data, _ i: Data.Index) -> UInt32 {
         UInt32(d[i]) | (UInt32(d[i + 1]) << 8) | (UInt32(d[i + 2]) << 16) | (UInt32(d[i + 3]) << 24)
     }
@@ -586,6 +762,24 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         var v: UInt64 = 0
         for k in 0..<8 { v |= UInt64(d[i + k]) << (8 * k) }
         return v
+    }
+
+    // MARK: raw requests (probing)
+
+    // Send one command and collect every packet that arrives within `window` seconds.
+    // For finding out which commands a device answers; callers must only send reads.
+    func rawExchange(_ cmd: UInt16, _ params: [UInt8] = [], window: TimeInterval = 1.5) async throws -> [Data] {
+        buffer.removeAll()
+        try await send(Proto.command(cmd, params))
+        var got: [Data] = []
+        let deadline = Date().addingTimeInterval(window)
+        while true {
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0 { break }
+            do { got.append(try await nextPacket(timeout: remaining)) }
+            catch BLEError.timeout { break }
+        }
+        return got
     }
 
     // MARK: device status and management (all after the handshake)
@@ -608,13 +802,18 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
                        level: b.count > 4 ? Int(b[b.startIndex + 4]) : 0)
     }
 
-    // getState (cmd 3): is it recording, and the current session id.
+    // getState (cmd 3): [state code u32 @3][privacy u8 @7][key state u8 @8][u8 @9][scene u8 @10]
+    // [session u32 @11]. The app's DeviceStatus.find: code 4099 = recording, else the key state
+    // (0 idle, 1 recording, 2 transfer, 3 switching on, 4 switching off).
     func getRecordingState() async throws -> RecordingState {
         try await send(Proto.command(Proto.CMD_GET_STATE))
         let b = try await waitCommand([Proto.CMD_GET_STATE], timeout: 10)
-        let sid = b.count >= 7 ? le32(b, b.startIndex.advanced(by: 3)) : 0
-        let recording = b.count > 7 && b[b.startIndex + 7] == 1
-        return RecordingState(recording: recording, sessionId: sid)
+        let code = b.count >= 7 ? le32(b, b.startIndex.advanced(by: 3)) : 0
+        let key = b.count >= 9 ? Int(b[b.startIndex + 8]) : 0
+        let sid = b.count >= 15 ? le32(b, b.startIndex.advanced(by: 11)) : 0
+        let state: RecordingState.Kind = code == 4099 ? .recording
+            : [0: .idle, 1: .recording, 2: .transfer, 3: .switchingOn, 4: .switchingOff][key] ?? .idle
+        return RecordingState(state: state, sessionId: sid, rawCode: code, rawKey: key)
     }
 
     // Delete one recording: send cmd 30 with the session id, wait for cmd 31 + status (0 = deleted).
@@ -627,13 +826,149 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         guard status == 0 else { throw BLEError.message("device refused delete, status=\(status)") }
     }
 
-    // Stop an in-progress recording (cmd 145).
+    // clearRecordFile (cmd 104): delete every recording. Reply status @3 (0 = done).
+    func deleteAllRecordings() async throws {
+        try await send(Proto.command(Proto.CMD_CLEAR_ALL_FILES))
+        let b = try await waitCommand([Proto.CMD_CLEAR_ALL_FILES], timeout: 30)
+        let status = b.count > 3 ? Int(b[b.startIndex + 3]) : 0
+        guard status == 0 else { throw BLEError.message("device refused to delete all, status=\(status)") }
+    }
+
+    // MARK: clock
+
+    // syncTime (cmd 4): [unix seconds u32][timezone hours i8][timezone minutes i8]. The official app
+    // sends this on every connect. Recording ids are start times from this clock.
+    func syncClock(now: Date = Date()) async throws {
+        let offset = TimeZone.current.secondsFromGMT(for: now) / 60
+        let hours = Int8(offset / 60), minutes = Int8(offset % 60)
+        try await send(Proto.command(Proto.CMD_TIME_SYNC, Proto.u32le(UInt32(now.timeIntervalSince1970))
+                                     + [UInt8(bitPattern: hours), UInt8(bitPattern: minutes)]))
+        _ = try await waitCommand([Proto.CMD_TIME_SYNC], timeout: 5)
+    }
+
+    // MARK: recording control (the official app always passes 0 as the extra argument)
+
+    // startRecord: cmd 20, [1][0]. Reply: session u32 @3, start u32 @7, status u8 @11 (0 = ok).
+    func startRecording() async throws -> UInt32 {
+        try await send(Proto.command(Proto.CMD_RECORD_START, [1, 0]))
+        let b = try await waitCommand([Proto.CMD_RECORD_START], timeout: 10)
+        let status = b.count > 11 ? Int(b[b.startIndex + 11]) : 0
+        guard status == 0 else { throw BLEError.message("device refused to start recording, status=\(status)") }
+        return b.count >= 7 ? le32(b, b.startIndex.advanced(by: 3)) : 0
+    }
+
+    // stopRecord: cmd 23, [1][0]. Reply: session u32 @3, reason u8 @7, file exists u8 @8, size u32 @9.
     func stopRecording() async throws {
-        try await send(Proto.command(Proto.CMD_STOP_RECORD))
-        _ = try await waitCommand([Proto.CMD_STOP_RECORD_RSP], timeout: 10)
+        try await send(Proto.command(Proto.CMD_RECORD_STOP, [1, 0]))
+        _ = try await waitCommand([Proto.CMD_RECORD_STOP], timeout: 10)
+    }
+
+    // recordPause / recordResume: cmd 21 / 22, [session u32 (0 below protocol 7)][0].
+    func pauseRecording(_ sessionId: UInt32) async throws {
+        try await recordControl(Proto.CMD_RECORD_PAUSE, sessionId)
+    }
+
+    func resumeRecording(_ sessionId: UInt32) async throws {
+        try await recordControl(Proto.CMD_RECORD_RESUME, sessionId)
+    }
+
+    private func recordControl(_ cmd: UInt16, _ sessionId: UInt32) async throws {
+        let sid = portVersion >= 7 ? sessionId : 0
+        try await send(Proto.command(cmd, Proto.u32le(sid) + [0]))
+        _ = try await waitCommand([cmd], timeout: 10)
+    }
+
+    // MARK: device info
+
+    // getBleDeviceName (cmd 108): the name as zero-padded UTF-8 after the 3-byte header.
+    func getDeviceName() async throws -> String {
+        try await send(Proto.command(Proto.CMD_GET_NAME))
+        return Self.name(from: try await waitCommand([Proto.CMD_GET_NAME], timeout: 5))
+    }
+
+    // setBleDeviceName (cmd 107): the name as UTF-8 in 32 zero-padded bytes; the reply is cmd 108.
+    func setDeviceName(_ name: String) async throws -> String {
+        var bytes = Array(name.utf8)
+        guard !bytes.isEmpty, bytes.count <= 32 else { throw BLEError.message("the name must be 1 to 32 bytes") }
+        bytes += [UInt8](repeating: 0, count: 32 - bytes.count)
+        try await send(Proto.command(Proto.CMD_SET_NAME, bytes))
+        return Self.name(from: try await waitCommand([Proto.CMD_GET_NAME], timeout: 5))
+    }
+
+    private static func name(from b: Data) -> String {
+        let raw = b.dropFirst(3).prefix { $0 != 0 }
+        return String(decoding: raw, as: UTF8.self)
+    }
+
+    // getDeviceStatus (cmd 141): four raw status bytes. The app only logs them.
+    func getDeviceStatus() async throws -> [UInt8] {
+        try await send(Proto.command(Proto.CMD_DEVICE_STATUS))
+        let b = try await waitCommand([Proto.CMD_DEVICE_STATUS], timeout: 5)
+        return Array(b.dropFirst(3).prefix(4))
+    }
+
+    // getSyncOtaFileInfo (cmd 151): a pending firmware file. [uid u32 @3][start u32 @7][end u32 @11]
+    // [version: type char in the low byte, number in the upper 24 bits, u32 @15].
+    func getFirmwareUpdateInfo() async throws -> FirmwareUpdateInfo {
+        try await send(Proto.command(Proto.CMD_OTA_INFO))
+        let b = try await waitCommand([Proto.CMD_OTA_INFO], timeout: 5)
+        guard b.count >= 19 else { throw BLEError.message("short firmware info reply") }
+        let v = le32(b, b.startIndex.advanced(by: 15))
+        return FirmwareUpdateInfo(start: le32(b, b.startIndex.advanced(by: 7)), end: le32(b, b.startIndex.advanced(by: 11)),
+                                  toVersion: v >> 8, toVersionType: v & 0xFF == 0 ? "" : String(UnicodeScalar(UInt8(v & 0xFF))))
+    }
+
+    // MARK: settings
+
+    // Common settings (cmd 8): read [1][setting u16], write [2][setting u16][value u32].
+    // Reply [setting u16 @3][value u32 @5]; 0xFFFFFFFF means the device does not have the setting.
+    func readSetting(_ id: UInt16) async throws -> UInt32? {
+        buffer.removeAll()   // a late reply to an earlier, timed-out request must not count as this one
+        try await send(Proto.command(Proto.CMD_SETTING, [1] + Proto.u16le(id)))
+        return try await settingReply(id)
+    }
+
+    func writeSetting(_ id: UInt16, _ value: UInt32) async throws -> UInt32? {
+        buffer.removeAll()
+        try await send(Proto.command(Proto.CMD_SETTING, [2] + Proto.u16le(id) + Proto.u32le(value)))
+        return try await settingReply(id)
+    }
+
+    private func settingReply(_ id: UInt16) async throws -> UInt32? {
+        let deadline = Date().addingTimeInterval(5)
+        while true {
+            let b = try await waitCommand([Proto.CMD_SETTING], timeout: max(0.1, deadline.timeIntervalSinceNow))
+            guard b.count >= 9, le16(b, 3) == id else { continue }   // a reply for another setting
+            let v = le32(b, b.startIndex.advanced(by: 5))
+            return v == 0xFFFF_FFFF ? nil : v
+        }
     }
 }
 
 struct StorageInfo { let free: UInt64; let total: UInt64; let durationSeconds: UInt64 }
 struct Battery { let charging: Bool; let level: Int }
-struct RecordingState { let recording: Bool; let sessionId: UInt32 }
+struct RecordingState {
+    enum Kind { case idle, recording, transfer, switchingOn, switchingOff }
+    let state: Kind
+    let sessionId: UInt32
+    let rawCode: UInt32
+    let rawKey: Int
+    var recording: Bool { state == .recording }
+}
+struct PulledFile { let data: Data; let tailCRC: UInt16? }
+struct FirmwareUpdateInfo { let start: UInt32; let end: UInt32; let toVersion: UInt32; let toVersionType: String }
+
+enum DeviceEvent: CustomStringConvertible {
+    case recordingDuration(sessionId: UInt32, milliseconds: UInt32)
+    case bookmark(sessionId: UInt32)
+    case newFile(sessionId: UInt32, size: UInt32)
+    case other(type: Int)
+    var description: String {
+        switch self {
+        case .recordingDuration(let s, let ms): return "recording \(s) at \(ms) ms"
+        case .bookmark(let s): return "bookmark in \(s)"
+        case .newFile(let s, let n): return "new file \(s) (\(n) bytes)"
+        case .other(let t): return "event type \(t)"
+        }
+    }
+}

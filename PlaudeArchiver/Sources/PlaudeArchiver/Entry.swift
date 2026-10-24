@@ -18,13 +18,27 @@ struct PlaudApp {
             } catch { FileHandle.standardError.write(Data("selftest error: \(error)\n".utf8)); exit(1) }
         }
 
-        // Hidden read-only device probe: connect, read status, list recordings; never deletes.
-        if args.contains("--probe-device") || args.contains("--selftest") {
-            let full = args.contains("--selftest")
+        // Hidden headless device checks. --probe-device and --probe-settings only read;
+        // --probe-features changes settings and restores them; --test-recording makes a short recording;
+        // --selftest downloads and then deletes one recording.
+        let modes = ["--probe-device", "--selftest", "--probe-settings", "--probe-features", "--test-recording"]
+        if let mode = modes.first(where: args.contains) {
             let model = DeviceModel()
+            model.pollingEnabled = false
             Task {
                 do {
-                    let report = try await (full ? model.selfTest() : model.probe())
+                    let report: String
+                    switch mode {
+                    case "--selftest": report = try await model.selfTest()
+                    case "--probe-settings": report = try await model.probeSettings()
+                    case "--test-recording": report = try await model.testRecording()
+                    case "--probe-features":
+                        // Optional: --resume-from <earlier .plaud copy of the smallest recording>
+                        let i = args.firstIndex(of: "--resume-from")
+                        let url = i.flatMap { $0 + 1 < args.count ? URL(fileURLWithPath: args[$0 + 1]) : nil }
+                        report = try await model.probeFeatures(resumeFrom: url)
+                    default: report = try await model.probe()
+                    }
                     FileHandle.standardOutput.write(Data((report + "\n").utf8))
                     exit(0)
                 } catch {

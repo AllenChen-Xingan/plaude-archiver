@@ -85,14 +85,22 @@ struct DashboardView: View {
 struct RecordingsTab: View {
     @ObservedObject var model: DeviceModel
     @State private var confirmDelete: Recording?
+    @State private var confirmDeleteAll = false
 
     var body: some View {
         VStack(spacing: 0) {
             StorageBar(storage: model.storage)
             HStack {
+                if model.connected { RecordingControls(model: model) }
                 Spacer()
-                Button("Download all") { model.downloadAll() }
-                    .disabled(model.busy || !model.recordings.contains { $0.state == .onDevice })
+                Button("Delete all…", role: .destructive) { confirmDeleteAll = true }
+                    .disabled(model.busy || recording || !model.recordings.contains { $0.state != .deleted })
+                if model.downloading {
+                    Button("Cancel download") { model.cancelDownload() }
+                } else {
+                    Button("Download all") { model.downloadAll() }
+                        .disabled(model.busy || recording || !model.recordings.contains { $0.state == .onDevice })
+                }
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             Divider()
@@ -112,7 +120,20 @@ struct RecordingsTab: View {
             Button("Delete from device", role: .destructive) { model.delete(rec.sessionId); confirmDelete = nil }
             Button("Cancel", role: .cancel) { confirmDelete = nil }
         } message: { _ in Text("This removes it from the device. If it isn't downloaded, it's gone for good.") }
+        .confirmationDialog("Delete every recording from the device?", isPresented: $confirmDeleteAll) {
+            Button("Delete all from device", role: .destructive) {
+                model.deleteAll(confirmed: Set(model.recordings.map(\.sessionId)))
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            let left = model.recordings.filter { $0.state == .onDevice }.count
+            Text((left == 0 ? "Every recording in this list is downloaded." : "\(left) recording(s) in this list are not downloaded. They will be gone for good.")
+                 + " If the device holds a recording that is not in this list, nothing is deleted.")
+        }
     }
+
+    // While the device records it refuses transfers, and Delete all would hit the live file.
+    private var recording: Bool { model.recordingState?.recording == true }
 
     private var emptyState: some View {
         VStack(spacing: 10) {
@@ -151,7 +172,7 @@ struct RecordingRow: View {
                 }
                 Button { model.download(rec.sessionId) } label: {
                     Image(systemName: rec.state == .downloaded ? "arrow.down.circle.fill" : "arrow.down.circle")
-                }.buttonStyle(.borderless).disabled(model.busy).help("Download")
+                }.buttonStyle(.borderless).disabled(model.busy || model.recordingState?.recording == true).help("Download")
                 Button { confirmDelete = rec } label: { Image(systemName: "trash") }
                     .buttonStyle(.borderless).disabled(model.busy).help("Delete from device")
             }
@@ -162,6 +183,40 @@ struct RecordingRow: View {
     private var statusDot: some View {
         Circle().fill(rec.state == .downloaded ? Color.green : rec.state == .deleted ? Color.secondary : Color.accentColor)
             .frame(width: 8, height: 8)
+    }
+}
+
+// Record / pause / stop, with the live time from device events.
+struct RecordingControls: View {
+    @ObservedObject var model: DeviceModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if model.recordingState?.recording == true {
+                Circle().fill(model.recordingPaused ? Color.orange : Color.red).frame(width: 8, height: 8)
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    Text(model.recordingPaused ? "Paused" : elapsed(at: ctx.date)).font(.callout.monospacedDigit())
+                }
+                Button { model.togglePause() } label: {
+                    Image(systemName: model.recordingPaused ? "play.fill" : "pause.fill")
+                }.help(model.recordingPaused ? "Resume" : "Pause")
+                Button { model.stopRecording() } label: { Image(systemName: "stop.fill") }.help("Stop recording")
+            } else {
+                Button { model.startRecording() } label: { Label("Record", systemImage: "record.circle") }
+                    .help("Start a recording on the device")
+            }
+        }
+        .disabled(model.busy)
+    }
+
+    // The device's own duration when it sends one, else the local clock for a recording started
+    // here. A recording started on the device itself shows no time.
+    private func elapsed(at now: Date) -> String {
+        let seconds: Int
+        if let ms = model.recordingMillis { seconds = Int(ms / 1000) }
+        else if let clock = model.recordingClock { seconds = Int(clock.elapsed(at: now)) }
+        else { return "Recording" }
+        return String(format: "%d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
     }
 }
 
@@ -189,6 +244,8 @@ struct StorageBar: View {
 
 struct DeviceTab: View {
     @ObservedObject var model: DeviceModel
+    @State private var newName = ""
+
     var body: some View {
         Form {
             Section("Status") {
@@ -199,12 +256,81 @@ struct DeviceTab: View {
                 if let s = model.storage, s.total > 0 {
                     row("Free space", ByteCountFormatter.string(fromByteCount: Int64(s.free), countStyle: .file))
                 }
+                if let r = model.recordingState { row("State", stateText(r)) }
+                if let f = model.firmwareUpdate {
+                    row("Firmware update", f.toVersion == 0 ? "none pending" : "\(f.toVersionType)\(f.toVersion) pending")
+                }
+            }
+            if model.connected {
+                Section("Device") {
+                    HStack {
+                        TextField("Name", text: $newName, prompt: Text(model.deviceName ?? "Device name"))
+                        Button("Rename") { model.rename(newName.trimmingCharacters(in: .whitespaces)); newName = "" }
+                            .disabled(model.busy || newName.trimmingCharacters(in: .whitespaces).isEmpty
+                                      || newName.utf8.count > 32)
+                    }
+                }
+                Section {
+                    if model.settingsLoaded {
+                        ForEach(DeviceSetting.all.filter { model.settingValues[$0.id] != nil }) { def in
+                            SettingRow(def: def, model: model)
+                        }
+                    } else {
+                        Button("Read device settings") { model.loadDeviceInfo() }.disabled(model.busy)
+                    }
+                } header: {
+                    Text("Device settings")
+                } footer: {
+                    if model.settingsLoaded {
+                        Text("Read from the device. Some settings are shown only: their allowed values are not known, or the device does not accept changes.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .formStyle(.grouped).scrollContentBackground(.hidden)
+        .onAppear { if model.connected && !model.settingsLoaded && !model.busy { model.loadDeviceInfo() } }
     }
+
     private func row(_ k: String, _ v: String) -> some View {
         HStack { Text(k); Spacer(); Text(v).foregroundStyle(.secondary).textSelection(.enabled) }
+    }
+
+    private func stateText(_ r: RecordingState) -> String {
+        switch r.state {
+        case .idle: return "idle"
+        case .recording: return model.recordingPaused ? "recording (paused)" : "recording"
+        case .transfer: return "transferring"
+        case .switchingOn: return "switching on"
+        case .switchingOff: return "switching off"
+        }
+    }
+}
+
+struct SettingRow: View {
+    let def: DeviceSetting
+    @ObservedObject var model: DeviceModel
+
+    var body: some View {
+        let value = model.settingValues[def.id] ?? 0
+        Group {
+            switch def.kind {
+            case .toggle:
+                Toggle(def.label, isOn: Binding(get: { value != 0 }, set: { model.setSetting(def, $0 ? 1 : 0) }))
+            case .choice(let options):
+                Picker(def.label, selection: Binding(get: { value }, set: { model.setSetting(def, $0) })) {
+                    ForEach(options, id: \.0) { Text($0.1).tag($0.0) }
+                    if !options.contains(where: { $0.0 == value }) { Text("\(value)").tag(value) }
+                }
+            case .readOnly:
+                HStack {
+                    Text(def.label); Spacer()
+                    Text("\(value)").foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
+        }
+        .disabled(model.busy)
+        .help(def.help ?? "")
     }
 }
 

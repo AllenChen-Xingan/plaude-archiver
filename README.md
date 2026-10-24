@@ -43,9 +43,10 @@ After the one-time key fetch, it never touches Plaud's servers again.
 
 A waveform icon lives in your menu bar. Open it for a small dashboard:
 
-- **Recordings**: every recording on the device with its date and size. Download, show in Finder, or delete each one. A storage bar shows how full the device is.
-- **Device**: live status. Serial, battery, free space, and the connection.
+- **Recordings**: every recording on the device with its date and size. Download, show in Finder, or delete each one, or delete them all. A storage bar shows how full the device is. **Record**, pause, resume and stop a recording on the device; the new recording shows up in the list when you stop. A broken download resumes where it stopped, even after a reconnect or an app restart, and you can cancel one. Every download is checked against the audio's own page checksums; "delete after download" removes the device's copy only when that check passes and the size matches.
+- **Device**: live status (serial, battery, free space, recording state, pending firmware update), rename the device, and the device's own settings: auto record, auto sync, iBeacon wake-up, auto power off and battery mode. The app also sets the device clock each time it connects, as the Plaud app does.
 - **Settings**: download folder, **"delete from device after download"** to stop the device filling up, and sign out.
+- **Delete all** re-reads the device first and deletes nothing if it holds a recording you have not seen in the list.
 
 <table>
   <tr>

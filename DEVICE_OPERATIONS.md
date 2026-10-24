@@ -1,6 +1,29 @@
 # What the Plaud app can do to the device
 
-Every operation the Android app (Tinnotech `penblesdk`) can run over BLE, grouped by what it does. Method names are from `IBleAgent` / `IWifiAgent`. Command numbers (the BLE opcode) are given where confirmed from the decompile. This is the menu of things `plaude-pirate` *could* do; today it only lists and downloads.
+Every operation the Android app (Tinnotech `penblesdk`) can run over BLE, grouped by what it does. Method names are from `IBleAgent` / `IWifiAgent`. Command numbers (the BLE opcode) are given where confirmed from the decompile. This is the menu of things the app *could* do. The table below says what a Note Pro actually answers.
+
+## What a Plaud Note Pro answers (tested 2026-10-24)
+
+Tested on a Note Pro (serial prefix 881, protocol 20) with the app's hidden modes `--probe-settings`, `--probe-features` and `--test-recording`.
+
+| Feature | Cmd | Result |
+|---|---|---|
+| Set the clock | 4: `[unix u32][tz hours i8][tz minutes i8]` | works |
+| Common settings, read | 8: `[1][setting u16]`, reply `[setting u16][value u32]`, `0xFFFFFFFF` = not on this device | 12 of 34 settings: 4, 15, 18, 19, 20, 23, 24, 25, 26, 27, 32, 49 |
+| Common settings, write | 8: `[2][setting u16][value u32]` | accepted: 23 auto power off (0, 4, 5 tried; 1 = "shut down" not tried), 25 auto record (it did not start a recording), 26 auto sync, 32 battery mode (0, 1, 2 tried), 49 iBeacon wake-up. Kept at 0 whatever is written: 15 voice detection, 24 save raw audio |
+| Recording state | 3: `[code u32 @3][privacy @7][key @8][scene @10][session u32 @11]` | code 4099 while recording, 1 when idle. Pause does not change it |
+| Start / pause / resume / stop | 20 `[1][0]`, 21 / 22 `[session u32][0]`, 23 `[1][0]` | all work. A 4 s + 2 s paused + 3 s test gave 7.6 s of audio |
+| Device name, read / write | 108 / 107 (32 bytes, reply 108) | works |
+| Device status, firmware update info | 141, 151 | answer; no update was pending |
+| Resume a download | 28 with a start offset | works: a download started at byte 17,408 matched a full copy |
+| Stop a download | 29, reply 30 | a cancel 150 ms into a download stopped it, and the link answered the next command |
+| Download checksum | tail packet `[session u32][crc u16]` | no usable checksum: the test transfers ended with the `0xFFFFFFFF` end marker, and an earlier capture shows a tail with CRC `0xFFFF`. The app checks the decrypted audio's Ogg page CRCs instead |
+| Device events | 19 (device to app) | none arrived during a recording |
+| Bookmarks / tags | 35, 38 | no reply |
+| LED | 24 / 25 | replies, but the state never changes |
+| No reply at all | 2, 15, 54, 106, 122, 131, 147, 149, 150, 152 | includes all Wi-Fi commands: the Note Pro has no Wi-Fi |
+
+Two corrections to older notes in this repo: stop recording is cmd 23 (145 stops a device-log transfer), and the recording state above replaces the old reading of byte 7 as "recording" (byte 7 is the privacy flag).
 
 ## 📥 Recording transfer (what we already do)
 
@@ -24,7 +47,7 @@ Every operation the Android app (Tinnotech `penblesdk`) can run over BLE, groupe
 
 ## 🎙️ Recording control
 
-`startRecord`, `startImmediateRecord`, `startSyncRecord`, `stopRecord` (145), `stopImmediateRecord`, `recordPause` (21), `recordResume` (22). Plus modes: `getRecMode`/`setRecMode`, `getRecScene`/`setRecScene`, `getPreRecord`/`setPreRecord`, `getSaveRAWFile`/`setSaveRAWFile`, `getAutoRecord`/`setAutoRecord`, `setAutoStopRecord`, `setAutoCallRecord`, `setAlarmRec`.
+`startRecord` (20), `startImmediateRecord`, `startSyncRecord`, `stopRecord` (23), `stopImmediateRecord`, `recordPause` (21), `recordResume` (22). Plus modes: `getRecMode`/`setRecMode`, `getRecScene`/`setRecScene`, `getPreRecord`/`setPreRecord`, `getSaveRAWFile`/`setSaveRAWFile`, `getAutoRecord`/`setAutoRecord`, `setAutoStopRecord`, `setAutoCallRecord`, `setAlarmRec`.
 
 ## 📊 Device status & identity
 

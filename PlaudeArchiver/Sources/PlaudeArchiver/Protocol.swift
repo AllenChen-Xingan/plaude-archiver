@@ -11,16 +11,28 @@ enum Proto {
     // Command ids.
     static let CMD_HANDSHAKE: UInt16 = 1
     static let CMD_GET_SSN: UInt16 = 2
-    static let CMD_GET_STATE: UInt16 = 3        // GetStateRsp: recording flag + session id
+    static let CMD_GET_STATE: UInt16 = 3        // GetStateRsp: state code, key state, session id
+    static let CMD_TIME_SYNC: UInt16 = 4        // [unix u32][tz hours i8][tz minutes i8]
     static let CMD_GET_STORAGE: UInt16 = 6      // StorageRsp: free / total / duration
+    static let CMD_SETTING: UInt16 = 8          // common settings: [action u8][setting u16][value u32]
     static let CMD_GET_BATTERY: UInt16 = 9      // BattStatusRsp: charging + level
+    static let CMD_EVENT: UInt16 = 19           // device -> app event push; app -> device ack
+    static let CMD_RECORD_START: UInt16 = 20
+    static let CMD_RECORD_PAUSE: UInt16 = 21
+    static let CMD_RECORD_RESUME: UInt16 = 22
+    static let CMD_RECORD_STOP: UInt16 = 23
     static let CMD_GET_REC_SESSIONS: UInt16 = 26
     static let CMD_SYNC_FILE_START: UInt16 = 28
-    static let CMD_SYNC_FILE_TAIL: UInt16 = 29
+    static let CMD_SYNC_FILE_TAIL: UInt16 = 29  // reply; as a request, 29 stops the transfer
+    static let CMD_SYNC_FILE_STOP: UInt16 = 29
+    static let CMD_SYNC_FILE_STOP_RSP: UInt16 = 30
     static let CMD_DELETE_FILE: UInt16 = 30     // send with session id; reply is CMD_DELETE_FILE_RSP
     static let CMD_DELETE_FILE_RSP: UInt16 = 31 // SyncRecFileDelRsp: status (0 = deleted)
-    static let CMD_STOP_RECORD: UInt16 = 145
-    static let CMD_STOP_RECORD_RSP: UInt16 = 23
+    static let CMD_CLEAR_ALL_FILES: UInt16 = 104
+    static let CMD_SET_NAME: UInt16 = 107       // reply is CMD_GET_NAME
+    static let CMD_GET_NAME: UInt16 = 108
+    static let CMD_DEVICE_STATUS: UInt16 = 141
+    static let CMD_OTA_INFO: UInt16 = 151
     static let FE10: UInt16 = 0xFE10   // app -> device: SN signature
     static let FE11: UInt16 = 0xFE11   // device -> app: send your public key
     static let FE12: UInt16 = 0xFE12   // session secret / public-key carrier
