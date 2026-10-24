@@ -39,6 +39,7 @@ final class DeviceModel: ObservableObject {
     private lazy var ble: BLEManager = {
         let b = BLEManager()
         b.onLog = { [weak self] s in self?.status = s }
+        b.onLinkLost = { [weak self] in self?.linkLost() }
         return b
     }()
     private var login: LoginWindow?
@@ -107,7 +108,27 @@ final class DeviceModel: ObservableObject {
             privKey = try Crypto.importRSAPrivateKey(pem: Data(pem.utf8))
         }
         if ble.isConnected { return }
+        connected = false
 
+        // Bluetooth links fail for passing reasons (a missed advert, a busy radio, a device that
+        // was still dropping the last link). Each attempt starts from a clean link.
+        let attempts = 3
+        for attempt in 1...attempts {
+            do {
+                try await connectAndUnlock(api: api, token: token)
+                return
+            } catch {
+                ble.disconnect()   // never leave a half-open link: the next scan would not see the device
+                Store.log("connect attempt \(attempt) failed: \(error)")
+                let retryable = (error as? BLEError)?.isRetryable ?? false
+                guard retryable, attempt < attempts else { throw error }
+                status = "Connection failed (\(error)). Retrying \(attempt + 1) of \(attempts)…"
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 1_500_000_000)
+            }
+        }
+    }
+
+    private func connectAndUnlock(api: PlaudAPI, token: String) async throws {
         status = "Connecting to the device…"
         try await ble.connect()
         self.deviceName = ble.discoveredName
@@ -121,7 +142,9 @@ final class DeviceModel: ObservableObject {
         store.lastSerial = serial; store.save()
         if store.snSignatures[serial] == nil {
             status = "Authorising the device…"
-            let s = try await api.snSign(serial: serial)
+            let s: (sig: String, host: String)
+            do { s = try await api.snSign(serial: serial) }
+            catch { throw BLEError.fatal("Could not get the device signature from Plaud: \(error)") }
             store.snSignatures[serial] = s.sig; store.apiHost = s.host; store.save()
         }
         guard let pem = store.devicePrivatePEM, let pub = store.devicePublicPEM,
@@ -141,6 +164,13 @@ final class DeviceModel: ObservableObject {
         ble.disconnect()
         connected = false
         status = "Disconnected."
+    }
+
+    // The link dropped by itself (out of range, device off, Bluetooth off). The next action
+    // reconnects, so only reset the UI state here.
+    private func linkLost() {
+        pollTimer?.invalidate(); pollTimer = nil
+        connected = false
     }
 
     // Headless full-loop self-test (for --selftest): connect, read status, list, then
@@ -209,12 +239,23 @@ final class DeviceModel: ObservableObject {
     private var bleBusy = false
     private var pollTimer: Timer?
 
+    private var pollTask: Task<Void, Never>?
+
     private func run(_ label: String, _ op: @escaping () async throws -> Void) {
-        guard !bleBusy else { return }
-        bleBusy = true; busy = true
+        guard !busy else { return }
+        busy = true
         Task {
+            await pollTask?.value   // let a background status poll finish, don't drop the click
+            bleBusy = true
             do { try await op() }
-            catch { status = "Error: \(error)"; connected = ble.isConnected }
+            catch {
+                status = "Error: \(error)"
+                // A device that stopped answering mid-command leaves the link in an unknown state.
+                // Drop it, so the next action starts with a fresh connection.
+                if case BLEError.timeout = error { ble.disconnect() }
+                connected = ble.isConnected
+                if !connected { pollTimer?.invalidate(); pollTimer = nil }
+            }
             busy = false; bleBusy = false
         }
     }
@@ -229,12 +270,20 @@ final class DeviceModel: ObservableObject {
     }
 
     private func pollStatus() {
-        guard connected, !bleBusy, ble.isConnected else { return }
+        guard connected, !bleBusy, !busy, ble.isConnected else { return }
         bleBusy = true
-        Task {
-            self.battery = try? await self.ble.getBattery()
-            self.storage = try? await self.ble.getStorage()
-            self.bleBusy = false
+        pollTask = Task {
+            defer { self.bleBusy = false; self.pollTask = nil }
+            do {
+                self.battery = try await self.ble.getBattery()
+                self.storage = try await self.ble.getStorage()
+            } catch BLEError.timeout {
+                // The device stopped answering. Drop the link; the next action reconnects.
+                Store.log("status poll timed out; dropping the link")
+                self.ble.disconnect()
+                self.linkLost()
+                self.status = "Lost contact with the device. Refresh to reconnect."
+            } catch {}
         }
     }
 
