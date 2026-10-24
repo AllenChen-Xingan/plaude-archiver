@@ -12,9 +12,10 @@ enum Screenshots {
         try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
 
         let model = sampleModel()
-        let shots: [(name: String, tab: Int, dark: Bool)] = [
-            ("recordings", 0, false), ("recordings-dark", 0, true),
-            ("device", 1, false), ("settings", 2, false),
+        // The Device tab holds the device settings too, so it gets a taller window.
+        let shots: [(name: String, tab: Int, dark: Bool, height: CGFloat)] = [
+            ("recordings", 0, false, 500), ("recordings-dark", 0, true, 500),
+            ("device", 1, false, 900), ("settings", 2, false, 500),
         ]
         for shot in shots {
             let host = NSHostingController(rootView: DashboardView(model: model, initialTab: shot.tab))
@@ -22,7 +23,7 @@ enum Screenshots {
             w.title = "Plaude Archiver"
             w.styleMask = [.titled, .closable, .resizable, .miniaturizable]
             w.appearance = NSAppearance(named: shot.dark ? .darkAqua : .aqua)
-            w.setContentSize(NSSize(width: 580, height: 500))
+            w.setContentSize(NSSize(width: 580, height: shot.height))
             w.center()
             app.activate(ignoringOtherApps: true)
             w.makeKeyAndOrderFront(nil)

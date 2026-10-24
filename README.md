@@ -43,14 +43,29 @@ After the one-time key fetch, it never touches Plaud's servers again.
 
 A waveform icon lives in your menu bar. Open it for a small dashboard:
 
-- **Recordings**: every recording on the device with its date and size. Download, show in Finder, or delete each one, or delete them all. A storage bar shows how full the device is. **Record**, pause, resume and stop a recording on the device; the new recording shows up in the list when you stop. A broken download resumes where it stopped, even after a reconnect or an app restart, and you can cancel one. Every download is checked against the audio's own page checksums; "delete after download" removes the device's copy only when that check passes and the size matches.
-- **Device**: live status (serial, battery, free space, recording state, pending firmware update), rename the device, and the device's own settings: auto record, auto sync, iBeacon wake-up, auto power off and battery mode. The app also sets the device clock each time it connects, as the Plaud app does.
+- **Recordings**: every recording on the device with its date and size. A storage bar shows how full the device is.
+  - Download, show in Finder, or delete each recording. **Download all** gets the rest, and you can cancel a download.
+  - **Record**, pause, resume and stop a recording on the device. The new recording shows up in the list when you stop.
+  - **Delete all** re-reads the device first. It deletes nothing if the device holds a recording you have not seen in the list, or is recording.
+- **Device**: live status (serial, battery, free space, recording state, pending firmware update), rename the device, and the device's own settings. You can change auto record, auto sync, iBeacon wake-up, auto power off and battery mode. The others the device reports are shown read-only.
 - **Settings**: download folder, **"delete from device after download"** to stop the device filling up, and sign out.
-- **Delete all** re-reads the device first and deletes nothing if it holds a recording you have not seen in the list.
+
+Downloads are built to never lose a recording:
+
+- A broken download resumes where it stopped: after a gap, after a dropped link, or after an app restart. Progress is kept in a `.part` file next to the download.
+- Every download is checked against the decrypted audio's own Ogg page checksums. The device's cipher has no integrity tag, so damaged bytes would otherwise still "decrypt".
+- "Delete after download" removes the device's copy only when that check passes and the device still lists the recording at exactly the size that arrived.
+
+The connection is built to recover by itself:
+
+- It finds your device even when a look-alike advertises nearby: it takes the device whose serial your account has a signature for, and ignores devices that show no serial.
+- The unlock takes about 1 second. A failed attempt drops the link cleanly and retries, up to 3 times. Errors that a retry cannot fix (no Bluetooth permission, Bluetooth off, device not found) stop at once with a clear message.
+- If the link drops, the dashboard shows it, and the next action reconnects.
+- Each time it connects, the app sets the device clock, as the Plaud app does. Recording names come from that clock.
 
 <table>
   <tr>
-    <td><img src="assets/screenshots/device.png" alt="The Device tab: name, serial, connection, battery and free space"></td>
+    <td><img src="assets/screenshots/device.png" alt="The Device tab: status, rename, and the device's own settings"></td>
     <td><img src="assets/screenshots/settings.png" alt="The Settings tab: download folder, delete after download, sign out"></td>
   </tr>
   <tr>
@@ -61,16 +76,39 @@ A waveform icon lives in your menu bar. Open it for a small dashboard:
 
 ```bash
 cd PlaudeArchiver
-./build.sh          # compiles, wraps and signs "Plaude Archiver.app"
-open "./Plaude Archiver.app"
+./build.sh                                                        # compiles, wraps and signs "Plaude Archiver.app"
+ditto "Plaude Archiver.app" "/Applications/Plaude Archiver.app"   # optional: install it
+open "/Applications/Plaude Archiver.app"
 ```
 
 - **Sign in to Plaud** opens `web.plaud.ai` in a window. Log in normally. The app reads the session cookie the site sets. It never scrapes the page or asks you to paste a token.
 - The first connect fetches your keys once. After that, everything happens directly over Bluetooth, and recordings save to `~/Downloads/Plaude Recordings`.
 
-> See [DEVICE_OPERATIONS.md](DEVICE_OPERATIONS.md) for the full list of about 160 things the device protocol exposes. The dashboard uses a safe subset.
+> See [DEVICE_OPERATIONS.md](DEVICE_OPERATIONS.md) for the full list of about 160 things the device protocol exposes, and a table of what a Note Pro actually answers. The Note Pro ignores some of them (the LED, bookmarks, device events), so the app does not offer those.
 
-> macOS needs the app to be a signed bundle with a Bluetooth usage string, or it kills the process the instant it touches the radio. `build.sh` makes the bundle and ad-hoc signs it for you.
+> macOS needs the app to be a signed bundle with a Bluetooth usage string, or it kills the process the instant it touches the radio. `build.sh` makes the bundle and ad-hoc signs it for you. Because the signature is ad hoc, macOS treats every rebuild as a new app and asks for Bluetooth permission again.
+
+### Troubleshooting
+
+- **The app logs every connection step** to `~/Library/Application Support/PlaudMenuBar/log.txt`. If a connect fails, the last lines say which step stopped.
+- **"Could not find the device"**: wake the recorder (press its button), and make sure the Plaud phone app is not connected to it. A connected device does not advertise.
+- **"Waiting for Bluetooth permission"**: click Allow in the macOS prompt, then refresh. This happens after every rebuild.
+
+### Testing against a real device
+
+The app has hidden headless modes for checking a device. Launch them through `open`, so that macOS gives the app its own Bluetooth permission. Run directly from a shell, the process is stopped (exit code 134).
+
+```bash
+open -n -W --stdout /tmp/out.txt --stderr /tmp/err.txt "Plaude Archiver.app" --args --probe-device
+```
+
+| Mode | What it does to the device |
+|------|------|
+| `--probe-device` | Reads status and lists recordings. Changes nothing. |
+| `--probe-settings` | Reads every setting and every read command, and prints the raw replies. Changes nothing. |
+| `--probe-features [--resume-from <plaud_ID.plaud>]` | Sets the clock, writes the name back unchanged, changes 5 settings and restores each one, and tests resume, the integrity check and cancel. With `--resume-from`, it also re-downloads that recording into your download folder. |
+| `--test-recording` | Starts, pauses, resumes and stops a recording. **Leaves a short recording on the device.** |
+| `--selftest` | Downloads the smallest recording, verifies it, then **deletes it from the device**. |
 
 ## The Python scripts
 
@@ -103,10 +141,10 @@ The full protocol (GATT UUIDs, packet framing, the protocol-20 RSA handshake, th
 |------|------|
 | `LoginWindow.swift` | WKWebView + session-cookie capture |
 | `PlaudAPI.swift` | `sn-sign` / `gen_key`, Fernet-decrypts replies, follows the region redirect |
-| `Crypto.swift` | Fernet (AES-CBC + HMAC), RSA PKCS#1, ChaCha20, the `PLAUD.AI` file format |
-| `Protocol.swift` | Tinnotech BLE packet format + the ChaCha20-Poly1305 session |
-| `BLE.swift` | CoreBluetooth: scan, connect, unlock, handshake, list, pull |
-| `DeviceModel.swift` | Dashboard state, the download and delete flows, live status polling |
+| `Crypto.swift` | Fernet (AES-CBC + HMAC), RSA PKCS#1, ChaCha20, the `PLAUD.AI` file format, the Ogg integrity check |
+| `Protocol.swift` | Tinnotech BLE packet format, command numbers, and the ChaCha20-Poly1305 session |
+| `BLE.swift` | CoreBluetooth: device selection, connect, unlock, handshake, ordered sends, resumable pull, recording control, settings, device events |
+| `DeviceModel.swift` | Dashboard state: connect with retries, download with resume and integrity checks, delete safety, recording control, device settings, polling, the test modes |
 | `DashboardView.swift` | The SwiftUI dashboard |
 | `AppDelegate.swift` | Menu bar wiring and the dashboard window |
 | `Screenshots.swift` | Renders the README screenshots from sample data |
@@ -120,6 +158,10 @@ The full protocol (GATT UUIDs, packet framing, the protocol-20 RSA handshake, th
 ## Status
 
 ✅ Verified end to end on a real Plaud Note Pro: login → key fetch → BLE unlock → download → decrypt → playable Opus.
+
+✅ Also tested on the device (2026-10-24): clock sync, rename, resumed downloads (a download started halfway matched a full copy byte for byte), cancel, the integrity check, record / pause / resume / stop, and changing each editable setting and restoring it.
+
+Not tested on a device: **Delete all**, and the two checks that refuse a delete (a recording you have not seen, a size mismatch).
 
 ## Branding
 
