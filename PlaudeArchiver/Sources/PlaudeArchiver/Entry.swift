@@ -37,6 +37,12 @@ struct PlaudApp {
             return
         }
 
+        // Hidden README screenshots from sample data; never touches the device or the network.
+        if args.count == 3, args[1] == "--screenshots" {
+            Screenshots.run(outDir: args[2])
+            return
+        }
+
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

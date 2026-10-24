@@ -35,7 +35,12 @@ final class DeviceModel: ObservableObject {
     }
 
     private var store = Store.load()
-    private let ble = BLEManager()
+    // Lazy so a model that never connects (the screenshot mode) never touches Bluetooth.
+    private lazy var ble: BLEManager = {
+        let b = BLEManager()
+        b.onLog = { [weak self] s in self?.status = s }
+        return b
+    }()
     private var login: LoginWindow?
     private var privKey: SecKey?
     private var loaded = false   // suppresses the didSet write during init
@@ -44,7 +49,6 @@ final class DeviceModel: ObservableObject {
         signedIn = store.userToken != nil
         deleteAfterDownload = store.deleteAfterSync
         loaded = true
-        ble.onLog = { [weak self] s in self?.status = s }
     }
 
     var downloadDirName: String { store.defaultDownloadDir.lastPathComponent }

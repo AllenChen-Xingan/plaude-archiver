@@ -1,12 +1,26 @@
 <div align="center">
 
-# 🎙️ Plaude Archiver
+<img src="assets/banner.png" alt="Plaude Archiver: your Plaud Note Pro recordings, on your Mac, straight off the device over Bluetooth" width="100%">
 
-### Own your recordings. Pull them straight off the device over Bluetooth — no cloud sync required.
+<br>
 
-A macOS menu-bar app (and a pair of Python scripts) that talk to a **Plaud Note Pro** in its own language, decrypt its recordings, and hand you plain `.ogg` files. Reverse-engineered from the Android app, down to the firmware's encrypted BLE handshake.
+![macOS 13+](https://img.shields.io/badge/macOS-13%2B-1E2A44?logo=apple&logoColor=white)
+![Swift 6](https://img.shields.io/badge/Swift-6-F97316?logo=swift&logoColor=white)
+![Bluetooth LE](https://img.shields.io/badge/Bluetooth-LE-1E2A44?logo=bluetooth&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-F59E0B)
 
-> **Plaude Archiver** is an independent interoperability tool. It is not affiliated with, endorsed by, or connected to Plaud. "Plaud" and "Plaud Note Pro" are used only to describe the device it works with.
+**Own your recordings. Pull them off the device over Bluetooth, with no cloud sync.**
+
+A macOS menu-bar app (and a pair of Python scripts) that talk to a **Plaud Note Pro** in its own language, decrypt its recordings, and give you plain `.ogg` files. Reverse-engineered from the Android app, down to the firmware's encrypted BLE handshake.
+
+<sub>Plaude Archiver is an independent interoperability tool for personal use. It is not affiliated with, endorsed by, or connected to Plaud. "Plaud" and "Plaud Note Pro" are used only to describe the device it works with.</sub>
+
+<br>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/recordings-dark.png">
+  <img src="assets/screenshots/recordings.png" alt="The Plaude Archiver dashboard: the Recordings tab with a storage bar and a list of recordings" width="600">
+</picture>
 
 </div>
 
@@ -14,11 +28,11 @@ A macOS menu-bar app (and a pair of Python scripts) that talk to a **Plaud Note 
 
 ## What this is
 
-Plaud recorders upload your audio to Plaud's cloud, where it gets transcribed and summarised. The recordings are "end-to-end encrypted" — but the key is issued by Plaud's own servers, so *they* can read everything. And if you just want your raw audio on your own machine, you normally have to go through their app and their cloud.
+Plaud recorders upload your audio to Plaud's cloud, where it gets transcribed and summarised. The recordings are "end-to-end encrypted", but the key comes from Plaud's own servers, so *they* can read everything. And if you only want your raw audio on your own machine, you normally have to go through their app and their cloud.
 
-This project cuts out the middle. It:
+This project removes the middle step. It:
 
-- 🔑 Logs into Plaud once (in a real browser window) to grab the two keys the device needs.
+- 🔑 Logs into Plaud once (in a real browser window) to get the two keys the device needs.
 - 📡 Connects to the recorder directly over **Bluetooth LE** using CoreBluetooth.
 - 🔓 Runs the device's encrypted unlock handshake (RSA-wrapped **ChaCha20-Poly1305**) itself.
 - 💾 Downloads every recording and decrypts each one to a playable **Ogg Opus** file.
@@ -27,24 +41,35 @@ After the one-time key fetch, it never touches Plaud's servers again.
 
 ## The menu-bar app
 
-🎙️ A waveform icon lives in your menu bar. Open it for a small dashboard:
+A waveform icon lives in your menu bar. Open it for a small dashboard:
 
-- **Recordings** — every recording on the device with its date, length and size. Download, play, or delete each one, a storage bar showing how full the device is, and a **"delete from device after download"** toggle to stop it filling up.
-- **Device** — live status: serial, battery, free space, and whether it's recording (with a Stop button).
-- **Settings** — download folder, the delete-after-download default, and sign out.
+- **Recordings**: every recording on the device with its date and size. Download, show in Finder, or delete each one. A storage bar shows how full the device is.
+- **Device**: live status. Serial, battery, free space, and the connection.
+- **Settings**: download folder, **"delete from device after download"** to stop the device filling up, and sign out.
+
+<table>
+  <tr>
+    <td><img src="assets/screenshots/device.png" alt="The Device tab: name, serial, connection, battery and free space"></td>
+    <td><img src="assets/screenshots/settings.png" alt="The Settings tab: download folder, delete after download, sign out"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Device</sub></td>
+    <td align="center"><sub>Settings</sub></td>
+  </tr>
+</table>
 
 ```bash
 cd PlaudeArchiver
-./build.sh          # compiles + wraps + signs "Plaude Archiver.app"
+./build.sh          # compiles, wraps and signs "Plaude Archiver.app"
 open "./Plaude Archiver.app"
 ```
 
-- **Sign in to Plaud** opens `web.plaud.ai` in a window. Log in normally; the app reads the session cookie the site sets. It never scrapes the page or asks you to paste a token.
-- The first connect fetches your keys once; after that everything happens directly over Bluetooth, and recordings save to `~/Downloads/Plaud Recordings`.
+- **Sign in to Plaud** opens `web.plaud.ai` in a window. Log in normally. The app reads the session cookie the site sets. It never scrapes the page or asks you to paste a token.
+- The first connect fetches your keys once. After that, everything happens directly over Bluetooth, and recordings save to `~/Downloads/Plaude Recordings`.
 
-> See [DEVICE_OPERATIONS.md](DEVICE_OPERATIONS.md) for the full list of ~160 things the device protocol exposes — the dashboard uses a safe subset.
+> See [DEVICE_OPERATIONS.md](DEVICE_OPERATIONS.md) for the full list of about 160 things the device protocol exposes. The dashboard uses a safe subset.
 
-> macOS needs the app to be a signed bundle with a Bluetooth usage string, or it kills the process the instant it touches the radio. `build.sh` handles the bundle + ad-hoc signing for you.
+> macOS needs the app to be a signed bundle with a Bluetooth usage string, or it kills the process the instant it touches the radio. `build.sh` makes the bundle and ad-hoc signs it for you.
 
 ## The Python scripts
 
@@ -69,7 +94,7 @@ python3 plaud_ble_pull.py --address <ADDR> --token <user_id> \
                             handshake ▶ list ▶ pull  ──▶  PLAUD.AI file  ──▶  decrypt  ──▶  .ogg
 ```
 
-The full protocol — GATT UUIDs, packet framing, the protocol-20 RSA handshake, the ECC (protocol-30) variant, and the on-device file format — is written up in **[PLAUD_NOTE_PRO_PROTOCOL.md](PLAUD_NOTE_PRO_PROTOCOL.md)**.
+The full protocol (GATT UUIDs, packet framing, the protocol-20 RSA handshake, the ECC protocol-30 variant, and the on-device file format) is written up in **[PLAUD_NOTE_PRO_PROTOCOL.md](PLAUD_NOTE_PRO_PROTOCOL.md)**.
 
 ### Architecture (Swift)
 
@@ -80,17 +105,40 @@ The full protocol — GATT UUIDs, packet framing, the protocol-20 RSA handshake,
 | `Crypto.swift` | Fernet (AES-CBC + HMAC), RSA PKCS#1, ChaCha20, the `PLAUD.AI` file format |
 | `Protocol.swift` | Tinnotech BLE packet format + the ChaCha20-Poly1305 session |
 | `BLE.swift` | CoreBluetooth: scan, connect, unlock, handshake, list, pull |
-| `AppDelegate.swift` | Menu bar wiring and the download flow |
+| `DeviceModel.swift` | Dashboard state, the download and delete flows, live status polling |
+| `DashboardView.swift` | The SwiftUI dashboard |
+| `AppDelegate.swift` | Menu bar wiring and the dashboard window |
+| `Screenshots.swift` | Renders the README screenshots from sample data |
 
 ## What the teardown turned up
 
 - The device's recordings are encrypted on the device, to a key only your account's RSA key can unwrap.
-- …except Plaud's `gen_key` endpoint hands *your private key* to the app (and keeps a copy). So the "end-to-end" encryption is **not** private from Plaud. This tool inherits that: it removes your dependence on Plaud's app, not Plaud's ability to read your audio. Re-binding the device to a key pair you generate yourself would fix that — see the protocol notes.
-- The device verifies a cloud-issued signature over its serial before it trusts the app. That signature is static and reusable, so once fetched, your device works offline forever.
+- But Plaud's `gen_key` endpoint gives *your private key* to the app (and keeps a copy). So the "end-to-end" encryption is **not** private from Plaud. This tool inherits that: it removes your dependence on Plaud's app, not Plaud's ability to read your audio. Re-binding the device to a key pair you generate yourself would fix that. See the protocol notes.
+- The device checks a cloud-issued signature over its serial before it trusts the app. That signature is static and reusable, so once fetched, your device works offline forever.
 
 ## Status
 
 ✅ Verified end to end on a real Plaud Note Pro: login → key fetch → BLE unlock → download → decrypt → playable Opus.
+
+## Branding
+
+The logo is a voice waveform dropping into an archive drawer. Sources are in [`assets/`](assets):
+
+| File | What |
+|------|------|
+| `icon.svg` | The app icon. The source for everything below. |
+| `banner.svg` | The README header and the GitHub social preview (1280×640). |
+| `build-icons.sh` | Renders `PlaudeArchiver/AppIcon.icns`, `icon-512.png` and `banner.png`. Needs `rsvg-convert`. |
+| `screenshots/` | Rendered by the app from sample data, with no device or account. |
+
+To render the screenshots again after a UI change:
+
+```bash
+cd PlaudeArchiver && ./build.sh
+"./Plaude Archiver.app/Contents/MacOS/PlaudeArchiver" --screenshots ../assets/screenshots
+```
+
+Colors: ink `#0B1120` → `#1E2A44`, amber `#FCD34D` → `#F97316`, slate `#F8FAFC` → `#CBD5E1`.
 
 ## Legal & ethical
 

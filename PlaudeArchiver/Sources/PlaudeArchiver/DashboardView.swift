@@ -3,7 +3,12 @@ import AppKit
 
 struct DashboardView: View {
     @ObservedObject var model: DeviceModel
-    @State private var tab = 0
+    @State private var tab: Int
+
+    init(model: DeviceModel, initialTab: Int = 0) {
+        self.model = model
+        _tab = State(initialValue: initialTab)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,7 +42,7 @@ struct DashboardView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "waveform.circle.fill").font(.title2).foregroundStyle(.tint)
+            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 32, height: 32)
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.deviceName ?? "Plaude Archiver").font(.headline)
                 Text(model.connected ? (model.serial ?? "connected") : "not connected")
