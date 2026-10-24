@@ -40,7 +40,7 @@ final class LoginWindow: NSObject, WKNavigationDelegate, NSWindowDelegate {
         let win = NSWindow(contentRect: web.frame,
                            styleMask: [.titled, .closable, .resizable, .miniaturizable],
                            backing: .buffered, defer: false)
-        win.title = "Sign in to Plaud"
+        win.title = "Sign in to Plaude"
         win.contentView = web
         win.center()
         win.isReleasedWhenClosed = false

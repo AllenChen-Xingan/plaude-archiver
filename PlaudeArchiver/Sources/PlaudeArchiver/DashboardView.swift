@@ -3,6 +3,7 @@ import AppKit
 
 struct DashboardView: View {
     @ObservedObject var model: DeviceModel
+    @State private var tab = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -10,24 +11,35 @@ struct DashboardView: View {
             if !model.signedIn {
                 signedOut
             } else {
-                TabView {
-                    RecordingsTab(model: model).tabItem { Label("Recordings", systemImage: "waveform") }
-                    DeviceTab(model: model).tabItem { Label("Device", systemImage: "externaldrive") }
-                    SettingsTab(model: model).tabItem { Label("Settings", systemImage: "gearshape") }
+                Picker("", selection: $tab) {
+                    Text("Recordings").tag(0)
+                    Text("Device").tag(1)
+                    Text("Settings").tag(2)
                 }
-                .padding(.top, 6)
+                .pickerStyle(.segmented).labelsHidden()
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                Divider()
+                Group {
+                    switch tab {
+                    case 0: RecordingsTab(model: model)
+                    case 1: DeviceTab(model: model)
+                    default: SettingsTab(model: model)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             Divider()
             statusBar
         }
         .frame(minWidth: 520, minHeight: 440)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "waveform.circle.fill").font(.title2).foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 1) {
-                Text(model.deviceName ?? "Plaud").font(.headline)
+                Text(model.deviceName ?? "Plaude Archiver").font(.headline)
                 Text(model.connected ? (model.serial ?? "connected") : "not connected")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -47,8 +59,8 @@ struct DashboardView: View {
         VStack(spacing: 14) {
             Spacer()
             Image(systemName: "lock.circle").font(.system(size: 40)).foregroundStyle(.secondary)
-            Text("Sign in to Plaud to fetch your device keys.").foregroundStyle(.secondary)
-            Button("Sign in to Plaud…") { model.signIn() }.controlSize(.large)
+            Text("Sign in to Plaude to fetch your device keys.").foregroundStyle(.secondary)
+            Button("Sign in to Plaude…") { model.signIn() }.controlSize(.large)
             Spacer()
         }.frame(maxWidth: .infinity)
     }
@@ -184,7 +196,7 @@ struct DeviceTab: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .formStyle(.grouped).scrollContentBackground(.hidden)
     }
     private func row(_ k: String, _ v: String) -> some View {
         HStack { Text(k); Spacer(); Text(v).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -213,7 +225,7 @@ struct SettingsTab: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
+        .formStyle(.grouped).scrollContentBackground(.hidden)
     }
 
     private func chooseFolder() {

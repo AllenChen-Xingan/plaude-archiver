@@ -46,7 +46,7 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         do {
             if central.state != .poweredOn { try await awaitStep(.power, timeout) }
             guard central.state == .poweredOn else { throw BLEError.message("Bluetooth not available") }
-            log("Scanning for a Plaud device…")
+            log("Scanning for a Plaude device…")
             // The device advertises service 0x504C (and the full 0x1910 is only visible after
             // connecting), so scan broadly and match in didDiscover.
             central.scanForPeripherals(withServices: nil, options: nil)
@@ -147,7 +147,7 @@ final class BLEManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
         guard let svc = p.services?.first(where: { $0.uuid == CBUUID(string: Proto.service) }) else {
-            resolveStep(.failure(BLEError.message("Plaud service not found"))); return
+            resolveStep(.failure(BLEError.message("Plaude service not found"))); return
         }
         p.discoverCharacteristics([CBUUID(string: Proto.notifyChar), CBUUID(string: Proto.writeChar)], for: svc)
     }

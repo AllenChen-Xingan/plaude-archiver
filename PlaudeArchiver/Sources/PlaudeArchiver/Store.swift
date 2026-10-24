@@ -52,7 +52,7 @@ struct Store: Codable {
     var defaultDownloadDir: URL {
         if let d = downloadDir { return URL(fileURLWithPath: d) }
         let dl = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
-        return dl.appendingPathComponent("Plaud Recordings", isDirectory: true)
+        return dl.appendingPathComponent("Plaude Recordings", isDirectory: true)
     }
 
     var haveKeys: Bool { devicePrivatePEM != nil && !snSignatures.isEmpty }

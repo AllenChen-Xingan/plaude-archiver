@@ -1,6 +1,6 @@
 # Swift build output
-PlaudMenuBar/.build/
-PlaudMenuBar/PlaudMenuBar.app/
+PlaudeArchiver/.build/
+PlaudeArchiver/*.app/
 *.xcodeproj
 
 # Python
@@ -10,6 +10,7 @@ __pycache__/
 
 # Recordings and device secrets — never commit these
 plaud-ble/
+plaude-ble/
 plaud-recordings/
 *.plaud
 *.ogg

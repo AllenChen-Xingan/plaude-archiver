@@ -10,10 +10,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.setActivationPolicy(.accessory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Plaud")
+        statusItem.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Plaude Archiver")
 
         let menu = NSMenu()
-        menu.addItem(withTitle: "Open Plaud…", action: #selector(openWindow), keyEquivalent: "")
+        menu.addItem(withTitle: "Open Plaude Archiver…", action: #selector(openWindow), keyEquivalent: "")
         menu.addItem(withTitle: "Open recordings folder", action: #selector(openFolder), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "q")
@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if window == nil {
             let host = NSHostingController(rootView: DashboardView(model: model))
             let w = NSWindow(contentViewController: host)
-            w.title = "Plaud"
+            w.title = "Plaude Archiver"
             w.styleMask = [.titled, .closable, .resizable, .miniaturizable]
             w.isReleasedWhenClosed = false
             w.delegate = self

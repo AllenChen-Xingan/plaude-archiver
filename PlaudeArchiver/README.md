@@ -1,4 +1,4 @@
-# Plaud Menu Bar
+# Plaude Archiver
 
 A macOS menu-bar app that downloads your own Plaud Note Pro recordings over Bluetooth, with no Plaud cloud sync. It uses the Plaud cloud only once, to fetch the two keys the device needs (your RSA key pair and the device signature). After that, downloads are fully local.
 
@@ -10,12 +10,12 @@ Built from the reverse-engineered protocol in `../PLAUD_NOTE_PRO_PROTOCOL.md`.
 ./build.sh
 ```
 
-This compiles the Swift package and wraps it in `PlaudMenuBar.app`, ad-hoc signed with a Bluetooth entitlement. The bundle and signature are required: macOS kills a bare binary the moment it touches Bluetooth (the TCC rule that crashed the Python script).
+This compiles the Swift package and wraps it in `Plaude Archiver.app`, ad-hoc signed with a Bluetooth entitlement. The bundle and signature are required: macOS kills a bare binary the moment it touches Bluetooth (the TCC rule that crashed the Python script).
 
 ## Run
 
 ```bash
-open ./PlaudMenuBar.app
+open "./Plaude Archiver.app"
 ```
 
 A waveform icon appears in the menu bar. From its menu:

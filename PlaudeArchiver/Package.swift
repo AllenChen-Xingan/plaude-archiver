@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "PlaudMenuBar",
+    name: "PlaudeArchiver",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "PlaudMenuBar",
-            path: "Sources/PlaudMenuBar",
+            name: "PlaudeArchiver",
+            path: "Sources/PlaudeArchiver",
             swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]

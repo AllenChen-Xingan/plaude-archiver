@@ -1,10 +1,12 @@
 <div align="center">
 
-# 🏴‍☠️ plaude-pirate
+# 🎙️ Plaude Archiver
 
-### Own your Plaud recordings. Pull them straight off the device over Bluetooth — no cloud sync required.
+### Own your recordings. Pull them straight off the device over Bluetooth — no cloud sync required.
 
 A macOS menu-bar app (and a pair of Python scripts) that talk to a **Plaud Note Pro** in its own language, decrypt its recordings, and hand you plain `.ogg` files. Reverse-engineered from the Android app, down to the firmware's encrypted BLE handshake.
+
+> **Plaude Archiver** is an independent interoperability tool. It is not affiliated with, endorsed by, or connected to Plaud. "Plaud" and "Plaud Note Pro" are used only to describe the device it works with.
 
 </div>
 
@@ -32,9 +34,9 @@ After the one-time key fetch, it never touches Plaud's servers again.
 - **Settings** — download folder, the delete-after-download default, and sign out.
 
 ```bash
-cd PlaudMenuBar
-./build.sh          # compiles + wraps + signs PlaudMenuBar.app
-open ./PlaudMenuBar.app
+cd PlaudeArchiver
+./build.sh          # compiles + wraps + signs "Plaude Archiver.app"
+open "./Plaude Archiver.app"
 ```
 
 - **Sign in to Plaud** opens `web.plaud.ai` in a window. Log in normally; the app reads the session cookie the site sets. It never scrapes the page or asks you to paste a token.
