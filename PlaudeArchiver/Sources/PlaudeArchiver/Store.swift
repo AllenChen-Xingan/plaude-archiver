@@ -3,8 +3,9 @@ import Foundation
 // Persisted state in ~/Library/Application Support/PlaudMenuBar/.
 // The RSA private key is the one secret worth protecting; the directory is created 0700.
 struct Store: Codable {
+    var accountRegion: String?
     var userToken: String?        // UT token (pld_ut cookie), used for sn-sign / gen_key
-    var apiHost: String = "https://api.plaud.ai"
+    var apiHost: String = "https://api.plaud.cn"
     var devicePrivatePEM: String? // RSA private key from gen_key (PKCS#8 PEM)
     var devicePublicPEM: String?
     var snSignatures: [String: String] = [:]   // serial -> base64 signature
@@ -14,7 +15,7 @@ struct Store: Codable {
 
     static var dir: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("PlaudMenuBar", isDirectory: true)
+        return base.appendingPathComponent("PlaudeArchiverCN", isDirectory: true)
     }
     private static var file: URL { dir.appendingPathComponent("state.json") }
 
@@ -23,6 +24,11 @@ struct Store: Codable {
         guard let data = try? Data(contentsOf: file),
               let s = try? JSONDecoder().decode(Store.self, from: data) else { return Store() }
         return s
+    }
+
+    // CLI reads existing state without creating directories or changing preferences.
+    static func loadExisting() throws -> Store {
+        try JSONDecoder().decode(Store.self, from: Data(contentsOf: file))
     }
 
     func save() {

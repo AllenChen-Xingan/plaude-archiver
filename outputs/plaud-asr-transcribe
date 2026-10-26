@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""Offline English transcription; native FluidAudio or existing Whisper script."""
+import argparse
+import json
+import math
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import wave
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+BINARY = HERE / 'plaud-engine/bin/fluidaudiocli'
+MODEL = ROOT / 'work/plaud-english/models/phonon-2'
+REVISION = '1b0ed50d686873128a4129b3510ce3914c849bab'
+
+def fail(message):
+    raise RuntimeError(message)
+
+def stamp(seconds):
+    value = round(seconds * 1000)
+    hours, value = divmod(value, 3600000)
+    minutes, value = divmod(value, 60000)
+    seconds, millis = divmod(value, 1000)
+    return f'{hours:02}:{minutes:02}:{seconds:02},{millis:03}'
+
+def main():
+    os.umask(0o077)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--engine', choices=['auto', 'parakeet', 'whisper', 'whisper-large', 'qwen-asr', 'apple-speech'], default='auto',
+                        help='auto prefers installed English Phonon-2; no runtime failure fallback')
+    parser.add_argument('--prompt', default=None, help='Optional vocabulary hint; explicit whisper or qwen-asr engines')
+    parser.add_argument('audio', type=Path)
+    parser.add_argument('output_prefix', type=Path, nargs='?')
+    args = parser.parse_args()
+    if args.prompt and args.engine not in ['whisper','whisper-large', 'qwen-asr']: parser.error('--prompt requires explicit whisper or qwen-asr engine')
+    started = time.perf_counter()
+    source = args.audio.resolve()
+    if not source.is_file() or not os.access(source, os.R_OK):
+        fail('Input must be a readable local file (URLs are not supported).')
+    prefix = (args.output_prefix or HERE / 'plaud-recordings' /
+              f'local-{time.time_ns()}').absolute()
+    extensions = ['txt', 'srt', 'json', 'verification.json']
+    for ext in extensions:
+        if os.path.lexists(f'{prefix}.{ext}'):
+            fail('Output already exists; choose a new prefix.')
+    required = ['Encoder.mlmodelc', 'Decoder.mlmodelc', 'Preprocessor.mlmodelc',
+                'JointDecisionv3.mlmodelc', 'parakeet_vocab.json', 'download-manifest.json']
+    available = BINARY.is_file() and all((MODEL / name).exists() for name in required)
+    engine = args.engine
+    if engine == 'auto':
+        engine = 'parakeet' if available else 'whisper'
+        print(f'Auto selected {engine}' + (' (English Phonon-2).' if available else
+              ': native model/CLI unavailable; using existing Whisper.'), file=sys.stderr)
+    if engine == 'apple-speech':
+        command=[sys.executable,str(HERE/'plaud-apple-speech/transcribe.py'),str(source),str(prefix)]
+        os.execv(sys.executable,command)
+    if engine == 'qwen-asr':
+        python=ROOT/'work/plaud-qwen-asr/venv/bin/python'
+        if not python.is_file(): fail('Qwen ASR runtime missing; run outputs/plaud-qwen-asr/setup.py')
+        command=[str(python),str(HERE/'plaud-qwen-asr/transcribe.py')]
+        if args.prompt: command+=['--prompt',args.prompt]
+        command += [str(source),str(prefix)]
+        os.execv(str(python),command)
+    if engine == 'whisper-large' or (engine == 'whisper' and args.prompt):
+        command=[sys.executable,str(HERE/'plaud-whisper-large/transcribe.py'),'--engine',engine]
+        if args.prompt: command+=['--prompt',args.prompt]
+        command += [str(source),str(prefix)]
+        os.execv(sys.executable,command)
+    if engine == 'whisper':
+        os.execv(str(HERE / 'plaud-local-transcribe.sh'),
+                 [str(HERE / 'plaud-local-transcribe.sh'), str(source), str(prefix)])
+    if not available:
+        fail('Native CLI/model missing. Run outputs/plaud-engine/setup.sh first, or select --engine whisper.')
+    for tool in ['ffmpeg', 'ffprobe']:
+        if not shutil.which(tool):
+            fail(f'Missing dependency: {tool}. Install with Homebrew.')
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.plaud-native-', dir=prefix.parent) as name:
+        temp = Path(name)
+        def run(command, log):
+            with log.open('w') as err:
+                result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=err,
+                                        env={**os.environ, 'OS_ACTIVITY_MODE': 'disable', 'PLAUD_OFFLINE': '1'})
+            if result.returncode:
+                fail(f'{Path(command[0]).name} failed (exit {result.returncode}); no transcript published. '
+                     'Private diagnostics removed. No automatic engine fallback.')
+        try:
+            duration = float(subprocess.check_output([
+                'ffprobe', '-v', 'error', '-protocol_whitelist', 'file,pipe',
+                '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(source)], stderr=subprocess.DEVNULL))
+        except (ValueError, subprocess.CalledProcessError):
+            fail('Cannot read input audio duration.')
+        run(['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-xerror',
+             '-protocol_whitelist', 'file,pipe', '-i', str(source), '-map', '0:a:0',
+             '-vn', '-map_metadata', '-1', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le',
+             str(temp / 'audio.wav')], temp / 'convert.log')
+        with wave.open(str(temp / 'audio.wav')) as wav:
+            samples = wav.getnframes()
+            pcm_duration = samples / wav.getframerate()
+        if not math.isfinite(duration) or duration <= 0 or abs(duration - pcm_duration) > 0.1:
+            fail('Source/decoded duration mismatch or empty audio.')
+        converted = time.perf_counter()
+        run(['/usr/bin/time', '-l', str(BINARY), 'transcribe', str(temp / 'audio.wav'),
+             '--model-version', 'phonon2', '--model-dir', str(MODEL),
+             '--output-json', str(temp / 'result.json')], temp / 'engine.log')
+        inferred = time.perf_counter()
+        if not (temp / 'result.json').is_file():
+            fail('Native engine did not produce JSON; model load or inference failed.')
+        data = json.loads((temp / 'result.json').read_text())
+        if not data.get('text', '').strip():
+            fail('Empty transcript; no outputs published.')
+        if abs(data.get('durationSeconds', -1) - pcm_duration) > 0.01:
+            fail('Native engine duration does not match the complete decoded audio.')
+        words = data.get('wordTimings', [])
+        if not words:
+            fail('Native engine produced no timestamps.')
+        srt = []
+        previous = -1.0
+        clamped = 0
+        for i, word in enumerate(words, 1):
+            a, b = word['startTime'], word['endTime']
+            if not all(math.isfinite(t) for t in [a, b]) or a < 0 or b < a or a < previous:
+                fail('Invalid native word timestamp sequence.')
+            previous = a
+            clamped += int(b > pcm_duration)
+            a, b = min(a, pcm_duration), min(b, pcm_duration)
+            srt.append(f'{i}\n{stamp(a)} --> {stamp(b)}\n{word["word"]}\n')
+        (temp / 'txt').write_text(data['text'].strip() + '\n')
+        (temp / 'srt').write_text('\n'.join(srt))
+        data['audioFile'] = str(source)
+        (temp / 'json').write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
+        rss = re.search(r'(\d+)\s+maximum resident set size', (temp / 'engine.log').read_text())
+        report = dict(engine='FluidAudio/phonon2', source_revision=REVISION,
+                      model_revision=json.loads((MODEL / 'download-manifest.json').read_text())['revision'],
+                      source_duration_seconds=duration, decoded_duration_seconds=pcm_duration,
+                      engine_duration_seconds=data['durationSeconds'], pcm_samples=samples,
+                      full_input_decoded=True, full_decoded_file_submitted=True, engine_exit_code=0,
+                      conversion_and_preflight_seconds=converted-started,
+                      engine_process_seconds=inferred-converted,
+                      engine_reported_processing_seconds=data.get('processingTimeSeconds'),
+                      total_seconds=time.perf_counter()-started,
+                      peak_rss_bytes=int(rss[1]) if rss else None,
+                      txt_bytes=(temp / 'txt').stat().st_size, timestamp_words=len(words),
+                      last_word_end_seconds=words[-1]['endTime'], srt_clamped_words=clamped,
+                      timing_clock='Python time.perf_counter; engine processing time reported by FluidAudio',
+                      compute='library default CPU + ANE; preprocessor CPU',
+                      accuracy='Not evaluated: no reference transcript')
+        (temp / 'verification.json').write_text(json.dumps(report, indent=2) + '\n')
+        for ext in extensions:
+            os.link(temp / ext, f'{prefix}.{ext}')
+        print(f'Complete local transcription: {prefix}.txt / .srt / .json / .verification.json')
+        print(f'Native process: {report["engine_process_seconds"]:.3f}s; '
+              f'total: {report["total_seconds"]:.3f}s; audio: {pcm_duration:.2f}s')
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (RuntimeError, OSError, ValueError, KeyError) as error:
+        print(f'Error: {error}', file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print('Interrupted; temporary files removed.', file=sys.stderr)
+        sys.exit(130)

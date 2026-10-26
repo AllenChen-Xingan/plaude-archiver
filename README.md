@@ -1,192 +1,56 @@
-<div align="center">
+# Plaud Local for Mac — preview
 
-<img src="assets/banner.png" alt="Plaude Archiver: your Plaud Note Pro recordings, on your Mac, straight off the device over Bluetooth" width="100%">
+A CLI-first recording library for Plaud Note Pro. Choose a Finder folder, import audio over Bluetooth or from a file, transcribe with local MLX Qwen3-ASR, label speakers with VBx, and generate a title, summary and action items locally. The SwiftUI app invokes the same background CLI jobs.
 
-<br>
-
-![macOS 13+](https://img.shields.io/badge/macOS-13%2B-1E2A44?logo=apple&logoColor=white)
-![Swift 6](https://img.shields.io/badge/Swift-6-F97316?logo=swift&logoColor=white)
-![Bluetooth LE](https://img.shields.io/badge/Bluetooth-LE-1E2A44?logo=bluetooth&logoColor=white)
-![License: MIT](https://img.shields.io/badge/license-MIT-F59E0B)
-
-**Own your recordings. Pull them off the device over Bluetooth, with no cloud sync.**
-
-A macOS menu-bar app (and a pair of Python scripts) that talk to a **Plaud Note Pro** in its own language, decrypt its recordings, and give you plain `.ogg` files. Reverse-engineered from the Android app, down to the firmware's encrypted BLE handshake.
-
-<sub>Plaude Archiver is an independent interoperability tool for personal use. It is not affiliated with, endorsed by, or connected to Plaud. "Plaud" and "Plaud Note Pro" are used only to describe the device it works with.</sub>
-
-<br>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/recordings-dark.png">
-  <img src="assets/screenshots/recordings.png" alt="The Plaude Archiver dashboard: the Recordings tab with a storage bar and a list of recordings" width="600">
-</picture>
-
-</div>
-
----
-
-## What this is
-
-Plaud recorders upload your audio to Plaud's cloud, where it gets transcribed and summarised. The recordings are "end-to-end encrypted", but the key comes from Plaud's own servers, so *they* can read everything. And if you only want your raw audio on your own machine, you normally have to go through their app and their cloud.
-
-This project removes the middle step. It:
-
-- 🔑 Logs into Plaud once (in a real browser window) to get the two keys the device needs.
-- 📡 Connects to the recorder directly over **Bluetooth LE** using CoreBluetooth.
-- 🔓 Runs the device's encrypted unlock handshake (RSA-wrapped **ChaCha20-Poly1305**) itself.
-- 💾 Downloads every recording and decrypts each one to a playable **Ogg Opus** file.
-
-After the one-time key fetch, it never touches Plaud's servers again.
-
-## The menu-bar app
-
-A waveform icon lives in your menu bar. Open it for a small dashboard:
-
-- **Recordings**: every recording on the device with its date and size. A storage bar shows how full the device is.
-  - Download, show in Finder, or delete each recording. **Download all** gets the rest, and you can cancel a download.
-  - **Record**, pause, resume and stop a recording on the device. The new recording shows up in the list when you stop.
-  - **Delete all** re-reads the device first. It deletes nothing if the device holds a recording you have not seen in the list, or is recording.
-- **Device**: live status (serial, battery, free space, recording state, pending firmware update), rename the device, and the device's own settings. You can change auto record, iBeacon wake-up, auto power off and battery mode. The others the device reports are shown read-only. The app leaves out "auto sync" on purpose: in the Plaud app it is "Sync in idle", which lets the recorder upload to Plaud's cloud over Wi-Fi.
-- **Settings**: download folder, **"delete from device after download"** to stop the device filling up, and sign out.
-
-Downloads are built to never lose a recording:
-
-- A broken download resumes where it stopped: after a gap, after a dropped link, or after an app restart. Progress is kept in a `.part` file next to the download.
-- Every download is checked against the decrypted audio's own Ogg page checksums. The device's cipher has no integrity tag, so damaged bytes would otherwise still "decrypt".
-- "Delete after download" removes the device's copy only when that check passes and the device still lists the recording at exactly the size that arrived.
-
-The connection is built to recover by itself:
-
-- It finds your device even when a look-alike advertises nearby: it takes the device whose serial your account has a signature for, and ignores devices that show no serial.
-- The unlock takes about 1 second. A failed attempt drops the link cleanly and retries, up to 3 times. Errors that a retry cannot fix (no Bluetooth permission, Bluetooth off, device not found) stop at once with a clear message.
-- If the link drops, the dashboard shows it, and the next action reconnects.
-- Each time it connects, the app sets the device clock, as the Plaud app does. Recording names come from that clock.
-
-<table>
-  <tr>
-    <td><img src="assets/screenshots/device.png" alt="The Device tab: status, rename, and the device's own settings"></td>
-    <td><img src="assets/screenshots/settings.png" alt="The Settings tab: download folder, delete after download, sign out"></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>Device</sub></td>
-    <td align="center"><sub>Settings</sub></td>
-  </tr>
-</table>
+## One-command install
 
 ```bash
-cd PlaudeArchiver
-./build.sh                                                        # compiles, wraps and signs "Plaude Archiver.app"
-ditto "Plaude Archiver.app" "/Applications/Plaude Archiver.app"   # optional: install it
-open "/Applications/Plaude Archiver.app"
+curl -fsSL https://raw.githubusercontent.com/AllenChen-Xingan/plaude-archiver/v0.2.0-preview.1/install.sh | /bin/bash
 ```
 
-- **Sign in to Plaud** opens `web.plaud.ai` in a window. Log in normally. The app reads the session cookie the site sets. It never scrapes the page or asks you to paste a token.
-- The first connect fetches your keys once. After that, everything happens directly over Bluetooth, and recordings save to `~/Downloads/Plaude Recordings`.
+**Apple Silicon, macOS 26.2 or newer, at least 20 GiB free disk.** The pinned MLX binary requires macOS 26.2; Intel and older macOS are not supported by this build. Apple M5/macOS 27 is the real machine tested. This is a preview, not a notarized production release.
 
-> See [DEVICE_OPERATIONS.md](DEVICE_OPERATIONS.md) for the full list of about 160 things the device protocol exposes, and a table of what a Note Pro actually answers. The Note Pro ignores some of them (the LED, bookmarks, device events), so the app does not offer those.
+No Homebrew, Python, Conda, Git or Xcode needs to be installed first. The installer downloads a private, checksum-verified runtime under `~/Library/Application Support/PlaudeLocal/runtime`, including Python, Git, ffmpeg and official Metal-enabled llama.cpp. It does not use sudo, modify system Python or edit shell profiles. It downloads and verifies Qwen3-ASR + alignment models (~5.92 GB), the speaker models and the local summary model (~2.50 GB), then runs a public-audio inference self-test. Rerun the same command after an interrupted install; verified complete models are reused.
 
-> macOS needs the app to be a signed bundle with a Bluetooth usage string, or it kills the process the instant it touches the radio. `build.sh` makes the bundle and ad-hoc signs it for you. Because the signature is ad hoc, macOS treats every rebuild as a new app and asks for Bluetooth permission again.
+Network access to GitHub, conda-forge, PyPI and Hugging Face is needed during installation. The app opens after installation. OS permission prompts and your own login still need your interaction. macOS can require approving the ad-hoc-signed app in Privacy & Security; the installer never disables Gatekeeper.
 
-### Troubleshooting
+To inspect before executing, download [install.sh](install.sh). The bootstrap pins the release archive's SHA-256; dependency versions/hashes are in [the runtime lock](outputs/plaud-distribution/dependencies-osx-arm64.lock). Downloading an archive manually and running `bash plaud-local-preview/install.sh --check` performs only the compatibility check.
 
-- **The app logs every connection step** to `~/Library/Application Support/PlaudMenuBar/log.txt`. If a connect fails, the last lines say which step stopped.
-- **"Could not find the device"**: wake the recorder (press its button), and make sure the Plaud phone app is not connected to it. A connected device does not advertise.
-- **"Waiting for Bluetooth permission"**: click Allow in the macOS prompt, then refresh. This happens after every rebuild.
+## First setup: China or International
 
-### Testing against a real device
+1. Choose **China / plaud.cn** or **International / plaud.ai** in the first setup page, then click **Login and prepare Bluetooth authentication**.
+2. Login is used only for device ownership, the device encryption key and device signature. The application does **not** list or download Plaud cloud recordings and does not use Plaud transcription.
+3. A single owned Note Pro is prepared automatically. For multiple owned devices, scan, select the intended serial number and prepare its credentials. Account changes do not reuse the old account's keys.
+4. Choose a recording library folder. Wake the recorder, disconnect it from the phone if needed, then **Scan → Verify connection → Import one recording**.
 
-The app has hidden headless modes for checking a device. Launch them through `open`, so that macOS gives the app its own Bluetooth permission. Run directly from a shell, the process is stopped (exit code 134).
+Routine BLE uses a private local identity file without the web login token. Authentication may need refreshing after account, device binding or key changes. Signing out of the webpage does not revoke the saved device key. Keep the application-support directory private; never share it or put it in a Git repository.
+
+**Validation boundary:** China-account authentication and real Note Pro BLE download were tested. International host selection, permitted regional redirects and cross-region rejection are covered by tests; a real international-account login is still awaiting user testing. This is not a claim that every firmware, account or macOS version works. Only Note Pro protocol 20 is supported. The current download action imports one smallest completed recording and retains the device original; automatic background batch sync remains a separate feature proposal.
+
+## CLI and storage
 
 ```bash
-open -n -W --stdout /tmp/out.txt --stderr /tmp/err.txt "Plaude Archiver.app" --args --probe-device
+~/.local/bin/plaud scan
+~/.local/bin/plaud prepare-bluetooth --serial YOUR_DEVICE_SERIAL
+~/.local/bin/plaud connect --serial YOUR_DEVICE_SERIAL
+~/.local/bin/plaud download --serial YOUR_DEVICE_SERIAL --library "$HOME/Documents/My recordings"
+~/.local/bin/plaud process "/path/meeting.m4a" --library "$HOME/Documents/My recordings" --background
+~/.local/bin/plaud jobs --library "$HOME/Documents/My recordings"
 ```
 
-| Mode | What it does to the device |
-|------|------|
-| `--probe-device` | Reads status and lists recordings. Changes nothing. |
-| `--probe-settings` | Reads every setting and every read command, and prints the raw replies. Changes nothing. |
-| `--probe-features [--resume-from <plaud_ID.plaud>]` | Sets the clock, writes the name back unchanged, changes 4 settings and restores each one, and tests resume, the integrity check and cancel. With `--resume-from`, it also re-downloads that recording into your download folder. |
-| `--test-recording` | Starts, pauses, resumes and stops a recording. **Leaves a short recording on the device.** |
-| `--selftest` | Downloads the smallest recording, verifies it, then **deletes it from the device**. |
+The app is installed at `~/Applications/Plaude Archiver CN.app` (the name is retained for compatibility; it supports both region choices). Audio, versioned TXT/SRT/JSON transcripts, Markdown summaries, names and job status are saved in your chosen folder. Closing the UI does not cancel background jobs. No startup/login service is installed.
 
-## The Python scripts
+Default ASR is Qwen3-ASR on MLX; default summary is local Qwen3-4B through llama.cpp. Apple Speech/Foundation Models remain optional. Groq Whisper transcription and Groq/DeepSeek summaries are also optional, using **your own** API key stored in Keychain and explicit upload authorization. No personal key, account, private recording or model weights are bundled. Local inference does not upload recordings. Speaker labels are anonymous labels, not identity recognition.
 
-For the terminal crowd, same capability, fewer frameworks:
+## Development and validation
+
+The app is Swift/SwiftUI; CLI/auth/library code is Python; the installer is Bash. [Architecture and operations](outputs/plaud-app/README.md). Python tests:
 
 ```bash
-pip install bleak requests cryptography
-python3 plaud_ble_pull.py --scan                       # find your device
-python3 plaud_ble_pull.py --address <ADDR> --token <user_id> \
-        --keys-dir ./secrets/keys                      # pull + decrypt over BLE
+python3 -m pip install requests cryptography
+python3 -m unittest discover -s outputs/plaud-app/tests
 ```
 
-`plaud_cloud_pull.py` is the alternative path: it downloads whatever your device already synced, straight from Plaud's cloud API.
+Native app: `cd PlaudeArchiver && ./build.sh` (requires a compatible Swift SDK). Release archives also need the pinned FluidAudio binary/resources and Apple helpers; install those build artifacts before running `outputs/plaud-distribution/build.py`. Ordinary end users use the release installer and need no compiler. Installation testing with `--no-activate` installs into `PLAUD_INSTALL_DIR` and runs real inference without replacing the GUI or preferences.
 
-## How it works
-
-```
-  web.plaud.ai  ──login cookie──▶  sn-sign + gen_key  ──▶  device signature + your RSA key
-                                                                    │
-  Note Pro  ◀──BLE 0x1910──▶  FE10 signature ▶ FE12 secret ▶  RSA-unwrap ▶ ChaCha20-Poly1305 session
-                                                                    │
-                            handshake ▶ list ▶ pull  ──▶  PLAUD.AI file  ──▶  decrypt  ──▶  .ogg
-```
-
-The full protocol (GATT UUIDs, packet framing, the protocol-20 RSA handshake, the ECC protocol-30 variant, and the on-device file format) is written up in **[PLAUD_NOTE_PRO_PROTOCOL.md](PLAUD_NOTE_PRO_PROTOCOL.md)**.
-
-### Architecture (Swift)
-
-| File | Does |
-|------|------|
-| `LoginWindow.swift` | WKWebView + session-cookie capture |
-| `PlaudAPI.swift` | `sn-sign` / `gen_key`, Fernet-decrypts replies, follows the region redirect |
-| `Crypto.swift` | Fernet (AES-CBC + HMAC), RSA PKCS#1, ChaCha20, the `PLAUD.AI` file format, the Ogg integrity check |
-| `Protocol.swift` | Tinnotech BLE packet format, command numbers, and the ChaCha20-Poly1305 session |
-| `BLE.swift` | CoreBluetooth: device selection, connect, unlock, handshake, ordered sends, resumable pull, recording control, settings, device events |
-| `DeviceModel.swift` | Dashboard state: connect with retries, download with resume and integrity checks, delete safety, recording control, device settings, polling, the test modes |
-| `DashboardView.swift` | The SwiftUI dashboard |
-| `AppDelegate.swift` | Menu bar wiring and the dashboard window |
-| `Screenshots.swift` | Renders the README screenshots from sample data |
-
-## What the teardown turned up
-
-- The device's recordings are encrypted on the device, to a key only your account's RSA key can unwrap.
-- But Plaud's `gen_key` endpoint gives *your private key* to the app (and keeps a copy). So the "end-to-end" encryption is **not** private from Plaud. This tool inherits that: it removes your dependence on Plaud's app, not Plaud's ability to read your audio. Re-binding the device to a key pair you generate yourself would fix that. See the protocol notes.
-- The device checks a cloud-issued signature over its serial before it trusts the app. That signature is static and reusable, so once fetched, your device works offline forever.
-
-## Status
-
-✅ Verified end to end on a real Plaud Note Pro: login → key fetch → BLE unlock → download → decrypt → playable Opus.
-
-✅ Also tested on the device (2026-10-24): clock sync, rename, resumed downloads (a download started halfway matched a full copy byte for byte), cancel, the integrity check, record / pause / resume / stop, and changing each editable setting and restoring it.
-
-Not tested on a device: **Delete all**, and the two checks that refuse a delete (a recording you have not seen, a size mismatch).
-
-## Branding
-
-The logo is a voice waveform dropping into an archive drawer. Sources are in [`assets/`](assets):
-
-| File | What |
-|------|------|
-| `icon.svg` | The app icon. The source for everything below. |
-| `banner.svg` | The README header and the GitHub social preview (1280×640). |
-| `build-icons.sh` | Renders `PlaudeArchiver/AppIcon.icns`, `icon-512.png` and `banner.png`. Needs `rsvg-convert`. |
-| `screenshots/` | Rendered by the app from sample data, with no device or account. |
-
-To render the screenshots again after a UI change:
-
-```bash
-cd PlaudeArchiver && ./build.sh
-"./Plaude Archiver.app/Contents/MacOS/PlaudeArchiver" --screenshots ../assets/screenshots
-```
-
-Colors: ink `#0B1120` → `#1E2A44`, amber `#FCD34D` → `#F97316`, slate `#F8FAFC` → `#CBD5E1`.
-
-## Legal & ethical
-
-This is for pulling **your own** recordings off **your own** device. It only talks to Plaud's own servers and your hardware. It is not affiliated with, endorsed by, or supported by Plaud. Built for interoperability and research. Don't point it at devices or accounts that aren't yours.
-
-## License
-
-MIT.
+Independent interoperability project, not affiliated with Plaud. Based on [roopen219/plaude-archiver](https://github.com/roopen219/plaude-archiver). See [LICENSE](LICENSE); runtime/model license notices accompany the respective downloads. The tiny LibriSpeech initialization sample is public domain.

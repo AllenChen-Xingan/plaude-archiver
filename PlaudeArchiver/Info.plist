@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Plaude Archiver</string>
+    <string>Plaude Archiver CN</string>
     <key>CFBundleDisplayName</key>
-    <string>Plaude Archiver</string>
+    <string>Plaude Archiver CN</string>
     <key>CFBundleIdentifier</key>
-    <string>ai.local.plaudmenubar</string>
+    <string>ai.local.plaudarchiver.cn</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>
