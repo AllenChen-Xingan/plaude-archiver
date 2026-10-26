@@ -8,6 +8,12 @@ The user chooses a writable library folder and enables automatic import. The app
 
 Audio and derived transcripts, speaker labels, summaries and action items live under the chosen library. Changing folders opens a separate library without migrating or deleting files. Models and account credentials are separate from the library. A library export must not include private keys or API tokens.
 
+## CLI-first architecture
+
+The CLI owns discovery, authentication, transfer, library persistence and AI jobs. The UI only selects a folder, issues CLI commands and renders persisted state/results. Running the UI must not be required for import or AI processing. Background workers detach from the launcher, write a durable per-library job record, serialize writes and support explicit cancellation. Closing or quitting the UI must not cancel an accepted background job. Restarting the UI reads job state from the chosen folder.
+
+Expose import, list, download, transcribe, summarize, process, jobs and cancel commands. Use structured progress events, private job files and atomic metadata updates. Secrets must not appear in process arguments, job files or exported recordings. Handle worker crashes and reject stale/reused process IDs before cancellation.
+
 ## State machine
 
 Disabled -> WaitingForBluetooth -> Scanning -> MatchingAccountDevice -> Connecting -> Authenticating -> Listing -> Importing -> Idle.
