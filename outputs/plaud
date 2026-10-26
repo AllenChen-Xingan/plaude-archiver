@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""CLI-first recording library. UI and headless jobs share this entrypoint."""
+import argparse, fcntl, json, os, signal, subprocess, sys, time, uuid
+from pathlib import Path
+
+HERE=Path(__file__).resolve().parent
+DEFAULT=Path.home()/'Library/Application Support/PlaudeArchiverCN/Library'
+os.umask(0o077)
+def stopped(signum,frame): raise KeyboardInterrupt()
+signal.signal(signal.SIGTERM,stopped)
+
+def emit(value): print(json.dumps(value,ensure_ascii=False),flush=True)
+def atomic(path,value):
+    temp=path.with_suffix('.tmp');temp.write_text(json.dumps(value,ensure_ascii=False,indent=2));temp.replace(path)
+
+def execute(request):
+    library=Path(request.get('library',DEFAULT)).expanduser().resolve()
+    library.mkdir(parents=True,exist_ok=True);request['library']=str(library)
+    with (library/'.queue.lock').open('a') as lock:
+        emit({'status':'等待录音库任务锁…'})
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        def one(value):
+            value=dict(value)
+            provider=value.get('engine') if value['action']=='transcribe' else value.get('summary_provider') if value['action']=='summarize' else None
+            if provider in {'groq','deepseek'} and not value.get('api_key'):
+                value['api_key']=os.environ.get('GROQ_API_KEY' if provider=='groq' else 'DEEPSEEK_API_KEY','')
+                if not value['api_key'] and sys.platform=='darwin':
+                    service='PlaudeArchiverCN.Groq' if provider=='groq' else 'PlaudeArchiverCN.DeepSeek'
+                    key=subprocess.run(['/usr/bin/security','find-generic-password','-s',service,'-a','api-key','-w'],capture_output=True,text=True)
+                    if key.returncode==0:value['api_key']=key.stdout.strip()
+            process=subprocess.Popen([sys.executable,str(HERE/'plaud-app/job.py')],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+            try:
+                process.stdin.write(json.dumps(value));process.stdin.close()
+                result={}; failure='处理未完成；原文件和先前结果保留。'
+                for line in process.stdout:
+                    try:
+                        event=json.loads(line);emit(event)
+                        if event.get('id'):result=event
+                        if event.get('error'):failure=event['error']
+                    except ValueError:pass
+                if process.wait()!=0:raise RuntimeError(failure)
+                return result
+            except BaseException:
+                process.terminate()
+                try:process.wait(timeout=15)
+                except subprocess.TimeoutExpired:process.kill();process.wait()
+                raise
+        if request['action']=='process':
+            imported=one(dict(action='import',source=request['source'],library=str(library)))
+            identity=imported['id']
+            one({**request,'action':'transcribe','id':identity})
+            if request.get('summarize',True):one({**request,'action':'summarize','id':identity})
+            return identity
+        return one(request).get('id')
+
+def worker(folder):
+    folder=Path(folder); state=json.loads((folder/'job.json').read_text())
+    def stop(signum,frame):raise KeyboardInterrupt()
+    signal.signal(signal.SIGTERM,stop)
+    state.update(state='running',started=time.time(),pid=os.getpid());atomic(folder/'job.json',state)
+    try:
+        identity=execute(json.load(sys.stdin));state.update(state='complete',recording_id=identity)
+    except KeyboardInterrupt:state.update(state='cancelled')
+    except Exception as e:state.update(state='failed',error=str(e))
+    finally:state.update(finished=time.time());atomic(folder/'job.json',state)
+    return 0 if state['state']=='complete' else 1
+
+def background(request):
+    library=Path(request['library']).expanduser().resolve();folder=library/'.jobs'/str(uuid.uuid4());folder.mkdir(parents=True,mode=0o700)
+    state=dict(id=folder.name,state='queued',created=time.time(),action=request['action'],library=str(library))
+    atomic(folder/'job.json',state)
+    with (folder/'events.jsonl').open('w') as log:
+        p=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--worker',str(folder)],stdin=subprocess.PIPE,
+                           stdout=log,stderr=log,start_new_session=True)
+        # Keep secrets off disk and out of command arguments.
+        p.stdin.write(json.dumps(request).encode());p.stdin.close()
+    emit(dict(job_id=folder.name,state='queued',library=str(library),status_file=str(folder/'job.json')))
+
+def main():
+    if len(sys.argv)>1 and sys.argv[1]=='--worker':return worker(sys.argv[2])
+    if sys.argv[1:]==['--json-request']:
+        request=json.load(sys.stdin)
+        if request.pop('background',False):background(request)
+        else:execute(request)
+        return 0
+    p=argparse.ArgumentParser(description=__doc__)
+    sub=p.add_subparsers(dest='command',required=True)
+    for name in ['list','jobs','cancel','import','download','transcribe','summarize','rename','process','install','key','scan','connect','prepare-bluetooth']:
+        c=sub.add_parser(name);c.add_argument('--library',type=Path,default=DEFAULT)
+        if name in ['import','process']:c.add_argument('source',type=Path)
+        if name in ['transcribe','summarize','cancel','rename']:c.add_argument('id')
+        if name=='rename':c.add_argument('title')
+        if name in ['connect','download','prepare-bluetooth']:c.add_argument('--serial')
+        if name=='key':
+            c.add_argument('operation',choices=['set','delete'])
+            c.add_argument('--provider',choices=['groq','deepseek'],default='groq')
+        if name in ['transcribe','process']:
+            c.add_argument('--engine',choices=['apple-speech','qwen-asr','whisper-large','parakeet','whisper','groq'],default='qwen-asr')
+            c.add_argument('--prompt',default='');c.add_argument('--allow-cloud',action='store_true')
+        if name in ['transcribe','process','summarize']:c.add_argument('--offline',action='store_true')
+        if name=='process':c.add_argument('--no-summary',action='store_true')
+        if name in ['summarize','process']:
+            c.add_argument('--summary-provider',choices=['apple','local','groq','deepseek'],default='local')
+            c.add_argument('--summary-prompt-file',type=Path)
+            c.add_argument('--allow-text-upload',action='store_true')
+            c.add_argument('--keep-title',action='store_true')
+        if name=='install':c.add_argument('model',choices=['apple-speech','qwen-asr','large','fast','summary'])
+        if name not in ['list','jobs']:c.add_argument('--background',action='store_true')
+    args=p.parse_args();library=args.library.expanduser().resolve()
+    if args.command=='key':
+        if sys.platform!='darwin':p.error('This key store requires macOS.')
+        import ctypes,getpass
+        # Security.framework keeps the API key out of process arguments and files.
+        sec=ctypes.CDLL('/System/Library/Frameworks/Security.framework/Security')
+        find=sec.SecKeychainFindGenericPassword
+        find.argtypes=[ctypes.c_void_p,ctypes.c_uint32,ctypes.c_char_p,ctypes.c_uint32,ctypes.c_char_p,ctypes.c_void_p,ctypes.c_void_p,ctypes.POINTER(ctypes.c_void_p)]
+        delete=sec.SecKeychainItemDelete;delete.argtypes=[ctypes.c_void_p]
+        add=sec.SecKeychainAddGenericPassword
+        add.argtypes=[ctypes.c_void_p,ctypes.c_uint32,ctypes.c_char_p,ctypes.c_uint32,ctypes.c_char_p,ctypes.c_uint32,ctypes.c_char_p,ctypes.c_void_p]
+        service=b'PlaudeArchiverCN.Groq' if args.provider=='groq' else b'PlaudeArchiverCN.DeepSeek'
+        account=b'api-key';item=ctypes.c_void_p()
+        if args.operation=='set':
+            secret=getpass.getpass(args.provider+' API Key (hidden): ').strip().encode()
+            if not secret:raise ValueError('Key cannot be empty.')
+        found=find(None,len(service),service,len(account),account,None,None,ctypes.byref(item))
+        if found==0:
+            if args.operation=='delete':code=delete(item)
+            else:
+                update=sec.SecKeychainItemModifyAttributesAndData;update.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_uint32,ctypes.c_char_p]
+                code=update(item,None,len(secret),secret)
+        elif found==-25300:
+            code=0 if args.operation=='delete' else add(None,len(service),service,len(account),account,len(secret),secret,None)
+        else:code=found
+        if code!=0:raise RuntimeError(f'Keychain operation failed ({code}).')
+        emit({'status':'API Key updated in macOS Keychain.'});return 0
+    if args.command=='cancel':
+        folder=(library/'.jobs'/args.id).resolve()
+        if folder.parent!=library/'.jobs':p.error('Invalid job id.')
+        state=json.loads((folder/'job.json').read_text())
+        if state['state'] not in ['queued','running']:emit(state);return 0
+        pid=state.get('pid')
+        if not isinstance(pid,int):raise RuntimeError('任务尚未启动，请稍后重试。')
+        actual=subprocess.check_output(['/bin/ps','-p',str(pid),'-o','command='],text=True)
+        if str(Path(__file__).resolve()) not in actual or '--worker '+str(folder) not in actual:
+            raise RuntimeError('无法确认任务进程身份，未发送停止信号。')
+        os.killpg(pid,signal.SIGTERM);emit({'status':'已请求停止后台任务。','job_id':args.id});return 0
+    if args.command in ['list','jobs']:
+        pattern='*/recording.json' if args.command=='list' else '.jobs/*/job.json'
+        for path in sorted(library.glob(pattern)):
+            try:emit(json.loads(path.read_text()))
+            except (OSError,ValueError):continue
+        return 0
+    request=dict(action=args.command,library=str(library))
+    for key in ['source','id','engine','prompt','model','title','summary_provider','serial']:
+        if hasattr(args,key) and getattr(args,key) is not None:request[key]=str(getattr(args,key))
+    if hasattr(args,'source'):request['source']=str(args.source.expanduser().resolve())
+    if hasattr(args,'allow_cloud'):request['allow_upload']=args.allow_cloud
+    if hasattr(args,'no_summary'):request['summarize']=not args.no_summary
+    if hasattr(args,'summary_prompt_file') and args.summary_prompt_file:request['summary_prompt']=args.summary_prompt_file.read_text()
+    if hasattr(args,'allow_text_upload'):request['allow_text_upload']=args.allow_text_upload
+    if hasattr(args,'keep_title'):request['rename']=not args.keep_title
+    if hasattr(args,'offline'):request['offline']=args.offline
+    if request.get('engine')=='groq' and not request.get('allow_upload'):
+        p.error('Cloud audio upload requires --allow-cloud; use a local engine otherwise.')
+    if request.get('summary_provider') in {'groq','deepseek'} and not request.get('allow_text_upload'):
+        p.error('Cloud summary requires --allow-text-upload; use --summary-provider local otherwise.')
+    if args.background:background(request)
+    else:execute(request)
+    return 0
+
+if __name__=='__main__':
+    try:sys.exit(main())
+    except KeyboardInterrupt:emit({'status':'已取消。'});sys.exit(130)
+    except Exception as error:emit({'error':str(error)});sys.exit(1)

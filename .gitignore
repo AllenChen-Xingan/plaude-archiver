@@ -21,3 +21,19 @@ sn_signature.json
 
 # macOS
 .DS_Store
+
+# Local runtime, release artifacts and credentials
+outputs/plaud-distribution/stage/
+outputs/plaud-distribution/*.tar.gz
+outputs/plaud-distribution/*.sha256
+outputs/plaud-engine/bin/
+outputs/plaud-apple/apple-summary
+outputs/plaud-apple/model-status
+outputs/plaud-apple-speech/apple-speech
+outputs/plaud-recordings/
+work/*/models/
+work/*/venv/
+work/*/private/
+bluetooth-identity*.json
+install-verification.json
+self-test-library/

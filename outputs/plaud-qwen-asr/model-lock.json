@@ -1,0 +1,151 @@
+{
+  "mlx_audio_revision": "3674813a24db8cb9e6ff816a8dfe1834741b179d",
+  "models": {
+    "asr": {
+      "repo": "mlx-community/Qwen3-ASR-1.7B-bf16",
+      "revision": "e1f6c266914abc5a46e8756e02580f834a6cf8a7",
+      "license": "apache-2.0",
+      "files": [
+        {
+          "type": "file",
+          "oid": "71c41cef2dfed48e63ff757911ec5cbaa8c9914f",
+          "size": 1008,
+          "path": "README.md"
+        },
+        {
+          "type": "file",
+          "oid": "c44736493efd71ec96218cc626904698cdb13235",
+          "size": 1161,
+          "path": "chat_template.json"
+        },
+        {
+          "type": "file",
+          "oid": "37b61780349564636d63dccd167b26e14d590c48",
+          "size": 6983,
+          "path": "config.json"
+        },
+        {
+          "type": "file",
+          "oid": "7382a4d347c0a865b76bb1b8277f66a5ac312854",
+          "size": 142,
+          "path": "generation_config.json"
+        },
+        {
+          "type": "file",
+          "oid": "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7",
+          "size": 1671853,
+          "path": "merges.txt"
+        },
+        {
+          "type": "file",
+          "oid": "de15b0864aac3648c7b7f0395ec22805df9af369",
+          "size": 4076186653,
+          "lfs": {
+            "oid": "2f080a3b769ae469aeaaa2dcb9e13a94141e54c9e6d5a7aa63392e0dc5a51789",
+            "size": 4076186653,
+            "pointerSize": 135
+          },
+          "xetHash": "c61077d0ab2d849ab6e7dcc4889c0748b165f4855784b48606ef1794acac1df3",
+          "path": "model.safetensors"
+        },
+        {
+          "type": "file",
+          "oid": "0ed946ae9d91b091a0f6ff1f12398787e4984a3f",
+          "size": 51384,
+          "path": "model.safetensors.index.json"
+        },
+        {
+          "type": "file",
+          "oid": "8f7f07346466d5d494ec0d4969d1c3d0190eed72",
+          "size": 330,
+          "path": "preprocessor_config.json"
+        },
+        {
+          "type": "file",
+          "oid": "b93109843922a40c6654c5449d3bf95372267c66",
+          "size": 12487,
+          "path": "tokenizer_config.json"
+        },
+        {
+          "type": "file",
+          "oid": "4783fe10ac3adce15ac8f358ef5462739852c569",
+          "size": 2776833,
+          "path": "vocab.json"
+        }
+      ]
+    },
+    "aligner": {
+      "repo": "mlx-community/Qwen3-ForcedAligner-0.6B-bf16",
+      "revision": "53c8c0e46733eec430e4b53dd6471d0e5dee45f8",
+      "license": "apache-2.0",
+      "files": [
+        {
+          "type": "file",
+          "oid": "9956259fa50a8bfa9c2a25b32a203b0d7cb50c9c",
+          "size": 1068,
+          "path": "README.md"
+        },
+        {
+          "type": "file",
+          "oid": "c44736493efd71ec96218cc626904698cdb13235",
+          "size": 1161,
+          "path": "chat_template.json"
+        },
+        {
+          "type": "file",
+          "oid": "d37a92d4b3792df0abcefd60c20e63f404216925",
+          "size": 6735,
+          "path": "config.json"
+        },
+        {
+          "type": "file",
+          "oid": "b0a540032cf7b6b5ba1438d04ab69b7e787d9b8e",
+          "size": 115,
+          "path": "generation_config.json"
+        },
+        {
+          "type": "file",
+          "oid": "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7",
+          "size": 1671853,
+          "path": "merges.txt"
+        },
+        {
+          "type": "file",
+          "oid": "8938cc141f2ca0945d9f2a255adc9f88351dbe7b",
+          "size": 1835539240,
+          "lfs": {
+            "oid": "9d0728e17e28ee122c366bfaa9748ccbbb8fc3df4c0ce09dd8a5eac8202989e8",
+            "size": 1835539240,
+            "pointerSize": 135
+          },
+          "xetHash": "d5887476f30f3d0fcfed5e83ce1bb5fcd081ea1668b25fba71e172c95fe2b4f9",
+          "path": "model.safetensors"
+        },
+        {
+          "type": "file",
+          "oid": "31f1561137d88a00691b2c3569963d9de1b52ef3",
+          "size": 51430,
+          "path": "model.safetensors.index.json"
+        },
+        {
+          "type": "file",
+          "oid": "8f7f07346466d5d494ec0d4969d1c3d0190eed72",
+          "size": 330,
+          "path": "preprocessor_config.json"
+        },
+        {
+          "type": "file",
+          "oid": "3df92df83b22342e36a7b11cf9a70de2a2996bec",
+          "size": 12666,
+          "path": "tokenizer_config.json"
+        },
+        {
+          "type": "file",
+          "oid": "4783fe10ac3adce15ac8f358ef5462739852c569",
+          "size": 2776833,
+          "path": "vocab.json"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,15 @@
+diff --git a/Sources/FluidAudioCLI/Commands/ASR/Parakeet/SlidingWindow/TranscribeCommand.swift b/Sources/FluidAudioCLI/Commands/ASR/Parakeet/SlidingWindow/TranscribeCommand.swift
+index da2387a2..092ede63 100644
+--- a/Sources/FluidAudioCLI/Commands/ASR/Parakeet/SlidingWindow/TranscribeCommand.swift
++++ b/Sources/FluidAudioCLI/Commands/ASR/Parakeet/SlidingWindow/TranscribeCommand.swift
+@@ -465,6 +465,10 @@ enum TranscribeCommand {
+     // MARK: - Run Dispatcher
+ 
+     static func run(arguments: [String]) async {
++        if ProcessInfo.processInfo.environment["PLAUD_OFFLINE"] == "1" {
++            ModelHub.offlineMode = true
++            AppLogger.minimumLevel = .warning
++        }
+         if arguments.contains("--help") || arguments.contains("-h") {
+             printUsage()
+             exit(0)

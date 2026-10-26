@@ -9,10 +9,13 @@ final class LoginWindow: NSObject, WKNavigationDelegate, NSWindowDelegate {
     private var webView: WKWebView?
     private var timer: Timer?
     private var done = false
+    private let region: String
+    private var cookieDomain: String { region == "cn" ? "plaud.cn" : "plaud.ai" }
     private let onToken: (String) -> Void
     var onClose: () -> Void = {}   // called if the user closes the window without signing in
 
-    init(onToken: @escaping (String) -> Void) {
+    init(region: String = "cn", onToken: @escaping (String) -> Void) {
+        self.region = region
         self.onToken = onToken
         super.init()
     }
@@ -21,7 +24,7 @@ final class LoginWindow: NSObject, WKNavigationDelegate, NSWindowDelegate {
         // If a prior login's cookie is still in the jar, sign in silently — no window flash.
         WKWebsiteDataStore.default().httpCookieStore.getAllCookies { [weak self] cookies in
             guard let self, !self.done else { return }
-            if let ut = cookies.first(where: { $0.name == "pld_ut" && !$0.value.isEmpty }) {
+            if let ut = cookies.first(where: { $0.name == "pld_ut" && ($0.domain == self.cookieDomain || $0.domain.hasSuffix("." + self.cookieDomain)) && !$0.value.isEmpty }) {
                 self.finish(token: ut.value)
             } else {
                 self.presentWindow()
@@ -40,7 +43,7 @@ final class LoginWindow: NSObject, WKNavigationDelegate, NSWindowDelegate {
         let win = NSWindow(contentRect: web.frame,
                            styleMask: [.titled, .closable, .resizable, .miniaturizable],
                            backing: .buffered, defer: false)
-        win.title = "Sign in to Plaude"
+        win.title = region == "cn" ? "登录 Plaud 中国区" : "Sign in to Plaud International"
         win.contentView = web
         win.center()
         win.isReleasedWhenClosed = false
@@ -50,7 +53,7 @@ final class LoginWindow: NSObject, WKNavigationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.regular)   // temporarily show in Dock so the window can focus
         NSApp.activate(ignoringOtherApps: true)
         win.makeKeyAndOrderFront(nil)
-        web.load(URLRequest(url: URL(string: "https://web.plaud.ai/")!))
+        web.load(URLRequest(url: URL(string: region == "cn" ? "https://web.plaud.cn/" : "https://web.plaud.ai/")!))
 
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.checkCookies() }
@@ -60,7 +63,7 @@ final class LoginWindow: NSObject, WKNavigationDelegate, NSWindowDelegate {
     private func checkCookies() {
         WKWebsiteDataStore.default().httpCookieStore.getAllCookies { [weak self] cookies in
             guard let self else { return }
-            if let ut = cookies.first(where: { $0.name == "pld_ut" && !$0.value.isEmpty }) {
+            if let ut = cookies.first(where: { $0.name == "pld_ut" && ($0.domain == self.cookieDomain || $0.domain.hasSuffix("." + self.cookieDomain)) && !$0.value.isEmpty }) {
                 self.finish(token: ut.value)
             }
         }

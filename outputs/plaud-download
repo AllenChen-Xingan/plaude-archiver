@@ -1,0 +1,13 @@
+#!/bin/bash
+# Pull the smallest completed recording from the verified account-owned device.
+set -euo pipefail
+root=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
+export PATH="$root/tools/llama:$root/deps/bin:$PATH"
+python="$root/work/plaud-research/venv/bin/python"
+probe="$root/work/plaud-research/cn_account_guarded_probe.py"
+[[ -x "$python" && -f "$probe" ]] || { echo 'Local Plaud setup is missing.' >&2; exit 1; }
+case "${1:-}" in
+ --check) shift; exec "$python" "$probe" --offline "$@" ;;
+ --help|-h) echo 'plaud-download [--check] [--serial SERIAL] — offline authenticated device only' ;;
+ *) exec "$python" "$probe" --offline --download-smallest "$@" ;;
+esac

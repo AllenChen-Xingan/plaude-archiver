@@ -7,15 +7,18 @@ cd "$(dirname "$0")"
 
 CONFIG=${1:-release}
 echo "Building ($CONFIG)..."
-swift build -c "$CONFIG"
-BIN="$(swift build -c "$CONFIG" --show-bin-path)/PlaudeArchiver"
+swift build --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk -c "$CONFIG"
+BIN="$(swift build --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk -c "$CONFIG" --show-bin-path)/PlaudeArchiver"
 
-APP="Plaude Archiver.app"
+APP="Plaude Archiver CN.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/PlaudeArchiver"
 cp Info.plist "$APP/Contents/Info.plist"
 cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+if [[ -f ../../../outputs/plaud-app/job.py ]]; then
+  (cd ../../.. && pwd -P) > "$APP/Contents/Resources/RuntimeRoot.txt"
+fi
 
 # Ad-hoc sign with the Bluetooth entitlement so TCC lets it use the radio.
 codesign --force --sign - --entitlements PlaudeArchiver.entitlements --options runtime "$APP" 2>/dev/null \

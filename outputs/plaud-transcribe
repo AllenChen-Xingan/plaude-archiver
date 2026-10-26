@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Local English ASR plus complete-file Offline VBx speaker labels (default ON)."""
+import argparse
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+import wave
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+sys.path.insert(0, str(HERE / 'plaud-diarization'))
+from alignment import align, cues
+sys.path.insert(0, str(HERE / 'plaud-whisper-large'))
+from config import checked_model
+RAW = HERE / 'plaud-asr-transcribe'
+BINARY = HERE / 'plaud-engine/bin/fluidaudiocli'
+MODELS = ROOT / 'work/plaud-diarization/models'
+
+def stamp(t):
+    ms = round(t*1000)
+    h, ms = divmod(ms,3600000); m, ms = divmod(ms,60000); s, ms = divmod(ms,1000)
+    return f'{h:02}:{m:02}:{s:02},{ms:03}'
+
+def run(cmd, log):
+    with log.open('w') as f:
+        p = subprocess.run(cmd, stdout=f, stderr=f,
+                           env={**os.environ, 'PLAUD_OFFLINE':'1', 'OS_ACTIVITY_MODE':'disable'})
+    if p.returncode:
+        raise RuntimeError(f'{Path(cmd[0]).name} failed (exit {p.returncode}); no outputs published. '
+                           'Check local model setup; no automatic fallback. Private diagnostics removed.')
+
+def main():
+    os.umask(0o077)
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--engine',choices=['auto','parakeet','whisper','whisper-large','qwen-asr','apple-speech'],default='auto')
+    p.add_argument('--asr-json',type=Path,help='Existing external ASR JSON; run local diarization only')
+    p.add_argument('--prompt',default=None,help='Optional vocabulary/context hint for explicit whisper, whisper-large or qwen-asr only; not guaranteed spelling')
+    g=p.add_mutually_exclusive_group()
+    g.add_argument('--diarize',dest='diarize',action='store_true',default=True)
+    g.add_argument('--no-diarize',dest='diarize',action='store_false',help='Raw ASR benchmark without speaker labels')
+    p.add_argument('audio',type=Path); p.add_argument('output_prefix',type=Path,nargs='?')
+    args=p.parse_args()
+    if args.asr_json and (not args.diarize or args.prompt): p.error('--asr-json requires diarization and cannot use --prompt')
+    if args.prompt and args.engine not in ['whisper','whisper-large','qwen-asr']: p.error('--prompt requires explicit whisper, whisper-large or qwen-asr')
+    if not args.diarize:
+        cmd=[str(RAW),'--engine',args.engine]
+        if args.prompt: cmd+=['--prompt',args.prompt]
+        cmd.append(str(args.audio))
+        if args.output_prefix: cmd.append(str(args.output_prefix))
+        os.execv(cmd[0],cmd)
+    started=time.perf_counter()
+    source=args.audio.resolve()
+    if not source.is_file(): raise ValueError('Input must be a readable local audio file.')
+    prefix=(args.output_prefix or HERE/'plaud-recordings'/f'diarized-{time.time_ns()}').absolute()
+    extensions=['txt','srt','json','verification.json']
+    if any(os.path.lexists(f'{prefix}.{ext}') for ext in extensions):
+        raise ValueError('Output already exists; choose a new prefix.')
+    lock=json.loads((HERE/'plaud-diarization/model-lock.json').read_text())
+    print('Verifying pinned local diarization models...',file=sys.stderr,flush=True)
+    for name,digest in lock['sha256'].items():
+        path=MODELS/name
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest:
+            raise ValueError(f'Diarization asset missing or checksum mismatch: {name}. Run outputs/plaud-diarization/setup.sh.')
+    cache_model = MODELS.parent/'cache/speaker-diarization'
+    if cache_model.resolve() != MODELS.resolve() or (MODELS/'.fluidaudio-revision').read_text().strip() != lock['revision']:
+        raise ValueError('Diarization cache/revision mismatch. Run outputs/plaud-diarization/setup.sh.')
+    if not BINARY.is_file(): raise ValueError('Native CLI missing; run outputs/plaud-diarization/setup.sh.')
+    engine=args.engine
+    native_model=ROOT/'work/plaud-english/models/phonon-2'
+    if engine=='auto':
+        engine='parakeet' if all((native_model/n).exists() for n in ['Encoder.mlmodelc','Decoder.mlmodelc','Preprocessor.mlmodelc','JointDecisionv3.mlmodelc','parakeet_vocab.json','download-manifest.json']) else 'whisper'
+    if args.asr_json: engine='external'
+    prefix.parent.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.plaud-diarized-',dir=prefix.parent) as td:
+        temp=Path(td)
+        print('Decoding complete local audio...',file=sys.stderr,flush=True)
+        duration=float(subprocess.check_output(['ffprobe','-v','error','-protocol_whitelist','file,pipe','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(source)],stderr=subprocess.DEVNULL))
+        run(['ffmpeg','-nostdin','-hide_banner','-loglevel','error','-xerror','-protocol_whitelist','file,pipe','-i',str(source),'-map','0:a:0','-vn','-map_metadata','-1','-ar','16000','-ac','1','-c:a','pcm_s16le',str(temp/'audio.wav')],temp/'conversion.log')
+        with wave.open(str(temp/'audio.wav')) as w:
+            samples=w.getnframes(); pcm=samples/w.getframerate()
+        if not math.isfinite(duration) or pcm<=0 or abs(duration-pcm)>.1: raise ValueError('Full decoding duration mismatch.')
+        converted=time.perf_counter()
+        print((f'Loading external ASR timestamps for {pcm:.2f}s...' if engine=='external' else f'Running {engine} ASR locally on {pcm:.2f}s...'),file=sys.stderr,flush=True)
+        if engine=='external':
+            external=json.loads(args.asr_json.read_text())
+            if not isinstance(external,dict) or not isinstance(external.get('text'),str): raise ValueError('External ASR text must be a string.')
+            ext_duration=external.get('durationSeconds')
+            if isinstance(ext_duration,bool) or not isinstance(ext_duration,(int,float)) or not math.isfinite(ext_duration) or abs(ext_duration-pcm)>.1: raise ValueError('External ASR duration must match complete decoded audio.')
+            ext_words=external.get('wordTimings')
+            if not isinstance(ext_words,list) or not ext_words: raise ValueError('External ASR requires nonempty wordTimings.')
+            clean_words=[]; previous=-1.0
+            for word in ext_words:
+                if not isinstance(word,dict) or not isinstance(word.get('word'),str) or not word['word'].strip(): raise ValueError('Invalid external ASR word.')
+                a,b=word.get('startTime'),word.get('endTime')
+                if any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) for v in [a,b]) or a<0 or b<a or a<previous or b>pcm+.1: raise ValueError('Invalid external ASR timestamp range/order.')
+                previous=a
+                clean_words.append(dict(word=word['word'],startTime=min(a,pcm),endTime=min(b,pcm)))
+            data=dict(text=external['text'],wordTimings=clean_words,durationSeconds=pcm)
+            asr_verify=dict(engine='external',source='Caller-supplied ASR JSON; provider not independently verified',local_asr=False,accuracy='Not evaluated')
+        elif engine in ['parakeet','qwen-asr','apple-speech']:
+            raw_command=[str(RAW),'--engine',engine]
+            if args.prompt: raw_command+=['--prompt',args.prompt]
+            raw_command += [str(temp/'audio.wav'),str(temp/'asr')]
+            run(raw_command,temp/'asr.log')
+            data=json.loads((temp/'asr.json').read_text())
+            asr_verify=json.loads((temp/'asr.verification.json').read_text())
+        else:
+            model=checked_model(engine)
+            whisper_command=['whisper-cli','-m',str(model),'-f',str(temp/'audio.wav'),'-l','en','-oj','-ml','1','-sow','-of',str(temp/'whisper')]
+            if args.prompt: whisper_command+=['--prompt',args.prompt]
+            run(whisper_command,temp/'asr.log')
+            raw=json.loads((temp/'whisper.json').read_text())
+            words=[dict(word=s['text'].strip(),startTime=s['offsets']['from']/1000,endTime=s['offsets']['to']/1000) for s in raw['transcription'] if s['text'].strip()]
+            data=dict(text=' '.join(w['word'] for w in words),wordTimings=words,durationSeconds=pcm,whisperResult=raw)
+            asr_verify=dict(engine=f'whisper.cpp/{model.stem}',prompt_used=bool(args.prompt),word_timestamp_method='--max-len 1 --split-on-word',accuracy='Not evaluated')
+        asr_done=time.perf_counter()
+        if not data.get('wordTimings'): raise ValueError('ASR returned no word timestamps.')
+        print('Running full-file Offline VBx (automatic cluster count, overlapping segments)...',file=sys.stderr,flush=True)
+        command=[str(BINARY),'process',str(temp/'audio.wav'),'--mode','offline','--model-dir',str(MODELS.parent/'cache'),'--overlapping-segments','--min-segment-duration','0','--output',str(temp/'diarization.json')]
+        run(command,temp/'diarization.log')
+        diar_done=time.perf_counter()
+        diar=json.loads((temp/'diarization.json').read_text())
+        if abs(diar['durationSeconds']-pcm)>.01: raise ValueError('Diarizer did not report complete input duration.')
+        aligned=align(data['wordTimings'],diar['segments'],pcm)
+        subtitles=cues(aligned)
+        # Do not retain voice embeddings in user-facing transcript JSON.
+        for s in diar['segments']: s.pop('embedding',None)
+        diar['audioFile']=str(source)
+        data.update(audioFile=str(source),wordTimings=aligned,diarization=diar,speakerCues=subtitles,
+                    alignmentPolicy='Temporal overlap; any multiple candidates, uncovered duration, or zero-duration word remains ambiguous; speaker IDs are anonymous clusters, not identities.',diarizationModelRevision=lock['revision'])
+        (temp/'json').write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n')
+        (temp/'txt').write_text('\n'.join(f'[{stamp(c["start"])} --> {stamp(c["end"])}] {c["speakerLabel"]}: {c["text"]}' for c in subtitles)+'\n')
+        (temp/'srt').write_text('\n'.join(f'{i}\n{stamp(c["start"])} --> {stamp(c["end"])}\n{c["speakerLabel"]}: {c["text"]}\n' for i,c in enumerate(subtitles,1)))
+        counts={s:sum(w['alignment']['status']==s for w in aligned) for s in ['assigned','unknown','partial','turn_boundary','overlap']}
+        report=dict(engine=engine,diarization='FluidAudio Offline VBx',source_revision='1b0ed50d686873128a4129b3510ce3914c849bab',diarization_model_revision=lock['revision'],source_duration_seconds=duration,decoded_duration_seconds=pcm,pcm_samples=samples,full_input_decoded=True,full_decoded_file_submitted=True,asr=asr_verify,preflight_and_conversion_seconds=converted-started,asr_stage_seconds=asr_done-converted,diarization_process_seconds=diar_done-asr_done,alignment_and_render_seconds=time.perf_counter()-diar_done,total_seconds=time.perf_counter()-started,detected_clusters=diar['speakerCount'],word_count=len(aligned),alignment_counts=counts,accuracy='Not evaluated; no listening/reference or verified speaker count',inference=('Local diarization only; ASR supplied externally' if engine=='external' else 'Local only; ModelHub.offlineMode true'),diarization_arguments=['process','<complete decoded WAV>',*command[3:-1],'<private output JSON>'])
+        (temp/'verification.json').write_text(json.dumps(report,indent=2)+'\n')
+        for ext in extensions: os.link(temp/ext,f'{prefix}.{ext}')
+        print(f'Complete local speaker-labeled output: {prefix}.txt / .srt / .json / .verification.json')
+        print(f'ASR stage {report["asr_stage_seconds"]:.3f}s; diarization {report["diarization_process_seconds"]:.3f}s; combined {report["total_seconds"]:.3f}s')
+if __name__=='__main__':
+    try: main()
+    except (RuntimeError,OSError,ValueError,KeyError,subprocess.CalledProcessError) as e:
+        print(f'Error: {e}',file=sys.stderr); sys.exit(1)
+    except KeyboardInterrupt:
+        print('Interrupted; temporary files removed.',file=sys.stderr); sys.exit(130)

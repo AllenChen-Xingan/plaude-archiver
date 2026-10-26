@@ -8,6 +8,7 @@ let package = Package(
         .executableTarget(
             name: "PlaudeArchiver",
             path: "Sources/PlaudeArchiver",
+            sources: ["Entry.swift", "AppDelegate.swift", "LibraryView.swift", "BluetoothLogin.swift", "LoginWindow.swift", "Store.swift"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]

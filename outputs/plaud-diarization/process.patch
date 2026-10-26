@@ -1,0 +1,53 @@
+--- a/Sources/FluidAudioCLI/Commands/ProcessCommand.swift
++++ b/Sources/FluidAudioCLI/Commands/ProcessCommand.swift
+@@ -11,6 +11,10 @@
+     private static let logger = AppLogger(category: "Process")
+ 
+     static func run(arguments: [String]) async {
++        if ProcessInfo.processInfo.environment["PLAUD_OFFLINE"] == "1" {
++            ModelHub.offlineMode = true
++            AppLogger.minimumLevel = .warning
++        }
+         if arguments.contains("--help") {
+             printUsage()
+             exit(0)
+@@ -150,7 +154,8 @@
+                 )
+             }
+ 
+-            let modelDir = OfflineDiarizerModels.defaultModelsDirectory()
++            let modelDir = args.modelDirectory.map { URL(fileURLWithPath: $0) }
++                ?? OfflineDiarizerModels.defaultModelsDirectory()
+             let manager = OfflineDiarizerManager(config: offlineConfig)
+ 
+             let configuration = MLModelConfigurationUtils.defaultConfiguration(
+@@ -245,6 +250,7 @@
+ 
+     private struct ParsedArgs {
+         var mode = "streaming"
++        var modelDirectory: String?
+         var outputFile: String?
+         var debug = false
+         var rttmFile: String?
+@@ -297,6 +303,13 @@
+                     parsed.mode = args[i + 1]
+                     i += 1
+                 }
++            case "--model-dir":
++                guard i + 1 < args.count else {
++                    fputs("ERROR: --model-dir requires a path\n", stderr)
++                    exit(1)
++                }
++                parsed.modelDirectory = args[i + 1]
++                i += 1
+             case "--output":
+                 if i + 1 < args.count {
+                     parsed.outputFile = args[i + 1]
+@@ -488,6 +501,7 @@
+ 
+             COMMON OPTIONS:
+                 --mode <streaming|offline>  Diarization mode (default: streaming)
++                --model-dir <directory>    Local offline model cache root
+                 --output <file>             Save results to JSON file
+                 --debug                     Enable debug logging
+                 --help                      Show this help message
