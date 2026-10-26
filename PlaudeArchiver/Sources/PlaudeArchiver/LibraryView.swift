@@ -243,6 +243,11 @@ struct LibraryView: View {
                 Text(model.status).font(.callout).textSelection(.enabled)
             }
         }.padding(14).frame(minWidth:760,minHeight:560)
+        .onAppear {
+            if ProcessInfo.processInfo.arguments.contains("--login-global") {
+                section = 1; bluetoothLogin.region = "global"; bluetoothLogin.signIn()
+            }
+        }
         .onChange(of:bluetoothLogin.loginGeneration) { _ in
             model.bluetoothSerial = ""
             model.job(["action":"prepare-bluetooth"])
