@@ -8,7 +8,7 @@ A CLI-first recording library for Plaud Note Pro. Choose a Finder folder, import
 curl -fsSL https://raw.githubusercontent.com/AllenChen-Xingan/plaude-archiver/v0.2.0-preview.1/install.sh | /bin/bash
 ```
 
-**Apple Silicon, macOS 26.2 or newer, at least 20 GiB free disk.** The pinned MLX binary requires macOS 26.2; Intel and older macOS are not supported by this build. Apple M5/macOS 27 is the real machine tested. This is a preview, not a notarized production release.
+**Apple Silicon, macOS 26.2 or newer, at least 20 GiB free disk; 16 GB RAM or more recommended.** The pinned MLX binary requires macOS 26.2; Intel and older macOS are not supported by this build. Apple M5/macOS 27 is the real machine tested. This is a preview, not a notarized production release.
 
 No Homebrew, Python, Conda, Git or Xcode needs to be installed first. The installer downloads a private, checksum-verified runtime under `~/Library/Application Support/PlaudeLocal/runtime`, including Python, Git, ffmpeg and official Metal-enabled llama.cpp. It does not use sudo, modify system Python or edit shell profiles. It downloads and verifies Qwen3-ASR + alignment models (~5.92 GB), the speaker models and the local summary model (~2.50 GB), then runs a public-audio inference self-test. Rerun the same command after an interrupted install; verified complete models are reused.
 
